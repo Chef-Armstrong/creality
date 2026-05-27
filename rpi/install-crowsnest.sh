@@ -6,9 +6,14 @@ source $BASEDIR/pellcorp/rpi/functions.sh
 CONFIG_HELPER="$BASEDIR/pellcorp/tools/config-helper.py"
 mode=$1
 
+# The installer should export this variable
+if [ -z "$TIMESTAMP" ]; then
+  export TIMESTAMP=$(date +"%Y-%m-%d_%H-%M-%S")
+fi
+
 grep -q "crowsnest" $BASEDIR/pellcorp.done
 if [ $? -ne 0 ]; then
-  if [ "$mode" != "update" ] || [ ! -f /usr/local/bin/crowsnest ]; then
+  if [ "$mode" != "update" ]; then
     echo
     echo "INFO: Installing crowsnest ..."
 
@@ -21,9 +26,14 @@ if [ $? -ne 0 ]; then
       retry sudo DEBIAN_FRONTEND=noninteractive apt-get --yes install make; error
     fi
 
-    sudo CROWSNEST_UNATTENDED=1 CROWSNEST_ADD_CROWSNEST_MOONRAKER=0 make install > /tmp/crowsnest.log
-    if [ $? -ne 0 ]; then
-      echo "ERROR: Crowsnest installation failed - see /tmp/crowsnest.log for error"
+    echo
+    echo "INFO: Installing crowsnest ... "
+
+    # thanks Chad for putting me onto script which seems to have resolved the alignment issues
+    script -qefc "sudo CROWSNEST_UNATTENDED=1 CROWSNEST_ADD_CROWSNEST_MOONRAKER=1 make install" /dev/null
+    if [ $? -eq 0 ]; then
+      echo "INFO: Crownest Installation complete!"
+    else
       exit 1
     fi
 
@@ -31,7 +41,6 @@ if [ $? -ne 0 ]; then
     cp $BASEDIR/pellcorp/rpi/crowsnest.conf $BASEDIR/printer_data/config/ || exit $?
   fi
 
-  $CONFIG_HELPER --file moonraker.conf --overrides $BASEDIR/pellcorp/rpi/crowsnest-um.conf --quiet || exit $?
   cp $BASEDIR/pellcorp/rpi/webcam.conf $BASEDIR/printer_data/config/ || exit $?
   $CONFIG_HELPER --file moonraker.conf --add-include "webcam.conf" || exit $?
   sudo systemctl restart crowsnest

@@ -40,14 +40,15 @@ def main():
     printer_cfg = 'printer.cfg' == os.path.basename(args.original)
     moonraker_conf = 'moonraker.conf' == os.path.basename(args.original)
     fan_control = 'fan_control.cfg' == os.path.basename(args.original)
-    grumpyscreen_cfg = 'grumpyscreen.cfg' == os.path.basename(args.original)
+    cartographer_cfg = 'cartographer.cfg' == os.path.basename(args.original)
+    grumpyscreen_cfg = 'grumpyscreen.cfg' == os.path.basename(args.original) or 'grumpyscreen.ini' == os.path.basename(args.original)
     # only support new sections for rpi webcam.conf
     webcam_conf = 'webcam.conf' == os.path.basename(args.original) and '/usr/data/printer_data/config/webcam.conf' not in args.updated
     crowsnest_conf = 'crowsnest.conf' == os.path.basename(args.original)
 
     deleted_sections = []
     for section_name in original.sections():
-        if section_name not in updated.sections() and (printer_cfg or fan_control or grumpyscreen_cfg):
+        if section_name not in updated.sections() and (moonraker_conf or printer_cfg or fan_control or grumpyscreen_cfg):
             deleted_sections.append(section_name)
 
     if fan_control:
@@ -59,12 +60,11 @@ def main():
         if 'static_digital_output nozzle_mcu_fan_always_on' in deleted_sections and 'heater_fan hotend' in deleted_sections:
             deleted_sections.remove('static_digital_output nozzle_mcu_fan_always_on')
 
-    # only support deleting sections from printer.cfg, fan_control.cfg or grumpyscreen.cfg for now
     for section_name in deleted_sections:
         if (exclude_sections and section_name in exclude_sections) or (include_sections and section_name not in include_sections):
             continue
 
-        if section_name not in updated.sections() and (printer_cfg or fan_control or grumpyscreen_cfg):
+        if section_name not in updated.sections() and (moonraker_conf or printer_cfg or fan_control or grumpyscreen_cfg):
             if len(overrides.sections()) > 0:
                 overrides[overrides.sections()[-1]].add_after.space().section(section_name)
             else:
@@ -80,32 +80,33 @@ def main():
         # and we are ignoring a new scanner section in config overrides due to migrating to cartotouch.cfg
         if section_name != 'scanner' and 'gcode_macro' not in section_name and (printer_cfg or moonraker_conf or fan_control or webcam_conf or crowsnest_conf or grumpyscreen_cfg):
             if section_name not in original.sections():
-                new_section = updated.get_section(section_name, None)
-                if len(overrides.sections()) > 0:
-                    overrides[overrides.sections()[-1]].add_after.space().section(section_name)
-                else:
-                    overrides.add_section(section_name)
-
-                for key in new_section.keys():
-                    value = new_section.get(key, None)
-                    if len(value.lines) > 1:
-                        lines = value.lines
-                        # get rid of additional newlines at end of multiline string
-                        lines[-1] = lines[-1].rstrip()
-                        # we want a multi-line value to always start with a new line
-                        lines[0] = '\n'
-                        overrides[section_name][key] = ''
-                        overrides[section_name][key].set_values(lines, indent='', separator='')
+                if not overrides.has_section(section_name):
+                    new_section = updated.get_section(section_name, None)
+                    if len(overrides.sections()) > 0:
+                        overrides[overrides.sections()[-1]].add_after.space().section(section_name)
                     else:
-                        value = value.value
-                        if '#' in value:
-                            value = value.split('#', 1)[0].strip()
-                        elif ';' in value:
-                            value = value.split(';', 1)[0].strip()
+                        overrides.add_section(section_name)
+
+                    for key in new_section.keys():
+                        value = new_section.get(key, None)
+                        if len(value.lines) > 1:
+                            lines = value.lines
+                            # get rid of additional newlines at end of multiline string
+                            lines[-1] = lines[-1].rstrip()
+                            # we want a multi-line value to always start with a new line
+                            lines[0] = '\n'
+                            overrides[section_name][key] = ''
+                            overrides[section_name][key].set_values(lines, indent='', separator='')
                         else:
-                            value = value.strip()
-                        overrides[section_name][key] = f' {value}'
-                update_overrides = True
+                            value = value.value
+                            if '#' in value:
+                                value = value.split('#', 1)[0].strip()
+                            elif ';' in value:
+                                value = value.split(';', 1)[0].strip()
+                            else:
+                                value = value.strip()
+                            overrides[section_name][key] = f' {value}'
+                    update_overrides = True
 
     for section_name in updated.sections():
         if (exclude_sections and section_name in exclude_sections) or (include_sections and section_name not in include_sections):
@@ -138,20 +139,25 @@ def main():
                 if ('gcode_macro' in section_name or section_name == 'homing_override') and key == 'gcode':
                     continue
 
+                if (section_name == 'virtual_sdcard') and key == 'on_error_gcode':
+                    continue
+
+                # we removed the variable_turn_off_chamber and variable_turn_on_chamber from turn on and off fans so don't apply an override here
+                # we normally only apply overrides where the variable exists but we allow new variables for fan control
+                # so we need this hack
+                if ('gcode_macro' in section_name) and (key == 'variable_turn_off_chamber' or key == 'variable_turn_on_chamber'):
+                    continue
+
                 # disable all overrides for any gcode shell commands
                 if 'gcode_shell_command' in section_name:
                     continue
 
-                # the stream urls are updated by s96ipaddress service so ignore if they are different
-                if 'webcam default' in section_name and (key == 'stream_url' or key == 'snapshot_url'):
+                # do not allow customisation of the pinned commit
+                if moonraker_conf and (section_name == 'update_manager klipper' or section_name == 'update_manager moonraker') and key == 'pinned_commit':
                     continue
 
-                # do not save the serial field
-                if (section_name == 'beacon' or section_name == 'scanner' or section_name == 'cartographer' or section_name == 'mcu eddy') and key == 'serial':
-                    continue
-
-                # do not add a new value that was missing from original unless this is for printer.cfg or the special is_non_critical field
-                if original_value or printer_cfg or fan_control or key == 'is_non_critical':
+                # do not add a new value that was missing from original unless this is for printer.cfg, fan_control.cfg, cartographer.cfg or the special is_non_critical field
+                if original_value or printer_cfg or fan_control or cartographer_cfg or key == 'is_non_critical':
                     if (not original_value and updated_value and updated_value.value) or (original_value and original_value.value and updated_value and updated_value.value and original_value.value != updated_value.value):
                         if not overrides.has_section(section_name):
                             if len(overrides.sections()) > 0:

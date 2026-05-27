@@ -43,7 +43,6 @@ while true; do
         client=true
         shift
     elif [ "$1" = "--client" ]; then
-        shift
         client=true
         shift
     else # no more parameters
@@ -58,7 +57,7 @@ if [ -d /root/.cache ]; then
 fi
 
 if [ "$IS_K1" = "true" ]; then
-    # this is required because K series boards do not have a RTC, so it 2020 when it
+    # this is required because K series boards do not have a RTC, so it is 2020 when it
     # gets turned on until ntp gets started, so we are looking for a massive drift jump
     # to know that ntp kicked in and finished its sync.   This script gets started
     # well before ntp does.
@@ -83,7 +82,7 @@ if [ "$IS_K1" = "true" ]; then
     files=$(find $BASEDIR/tmp -type f -mtime 0 -print)
     for file in $files; do
         filename=$(basename $file)
-        if [ "$filename" != "moonraker_instance_ids" ]; then
+        if [ "$filename" != "moonraker_instance_ids" ] && [ "$filename" != "mcu_update.log" ] && [ "$filename" != "messages" ]; then
             delete $file
         fi
     done
@@ -119,7 +118,7 @@ files=$(find $BASEDIR/printer_data/logs/ -maxdepth 1 -name "*.log" -type f -mtim
 for file in $files; do
     filename=$(basename $file)
     # lets just make sure we do not delete these files accidentally
-    if [ "$filename" != "moonraker.log" ] && [ "$filename" != "grumpyscreen.log" ] && [ "$filename" = "klippy.log" ]; then
+    if [ "$filename" != "moonraker.log" ] && [ "$filename" != "grumpyscreen.log" ] && [ "$filename" != "klippy.log" ]; then
         delete $file
     fi
 done

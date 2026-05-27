@@ -5,12 +5,17 @@ ROOT_DIR=$(dirname $CURRENT_DIR)
 
 incus delete klipper --force 2> /dev/null
 
+#sudo ufw allow in on incusbr0
+#sudo ufw route allow in on incusbr0
+#sudo ufw route allow out on incusbr0
+#incus network set incusbr0 ipv6.firewall false
+#incus network set incusbr0 ipv4.firewall false
+
+sudo firewall-cmd --permanent --zone=trusted --add-interface=incusbr0
+sudo firewall-cmd --reload
+
+# this is required so that ping and other things work and needs to be after firewall-cmd
 sudo iptables -P FORWARD ACCEPT
-sudo ufw allow in on incusbr0
-sudo ufw route allow in on incusbr0
-sudo ufw route allow out on incusbr0
-incus network set incusbr0 ipv6.firewall false
-incus network set incusbr0 ipv4.firewall false
 
 default_user=debian
 if [ "$1" = "jammy" ]; then
@@ -45,10 +50,13 @@ while true; do
 done
 
 incus file push $HOME/.ssh/id_rsa.pub "klipper/root/id_rsa.pub"
+
+# seems like running this again before setup might fix some issues no idea why, perhaps this is a fedora thing
+sudo iptables -P FORWARD ACCEPT
+
 incus exec klipper -- /opt/projects/incus/setup.sh
 
 IP_ADDRESS=$(incus info klipper | grep inet | head -1 | awk -F ':' '{print $2}' | sed 's:/24 (global)::g' | tr -d '[:space:]')
-#IP_ADDRESS=$(incus exec klipper -- bash -c "ip route | grep 'default' | awk '{print \$9}' | tail -1" 2> /dev/null)
 ssh-keygen -f "$HOME/.ssh/known_hosts" -R $IP_ADDRESS > /dev/null 2>&1
 ssh-keyscan -t rsa "$IP_ADDRESS" >> "$HOME/.ssh/known_hosts" 2> /dev/null
 

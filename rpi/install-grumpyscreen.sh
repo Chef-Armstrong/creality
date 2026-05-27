@@ -1,16 +1,28 @@
 #!/bin/bash
 
 # this allows us to make changes to Simple AF and grumpyscreen in parallel
-GRUMPYSCREEN_TIMESTAMP=1764856400
+GRUMPYSCREEN_TIMESTAMP=1779138100
 
 BASEDIR=$HOME
 source $BASEDIR/pellcorp/rpi/functions.sh
+
+# for some reason grumpyscreen does not work on Debian 13
+if [ $debian_release -ge 13 ]; then
+  echo "ERROR: Grumpyscreen not supported on Debian 13"
+  exit 1
+fi
 
 mode=$1
 
 grep -q "grumpyscreen" $BASEDIR/pellcorp.done
 if [ $? -ne 0 ]; then
   echo
+
+  if [ "$(sudo systemctl is-enabled KlipperScreen 2> /dev/null)" = "enabled" ]; then
+    echo "INFO: Stop and disable KlipperScreen"
+    sudo systemctl stop KlipperScreen > /dev/null 2>&1
+    sudo systemctl disable KlipperScreen > /dev/null 2>&1
+  fi
 
   if [ "$mode" != "update" ] && [ -d $BASEDIR/guppyscreen ]; then
     if [ -f /etc/systemd/system/grumpyscreen.service ]; then
@@ -45,19 +57,29 @@ if [ $? -ne 0 ]; then
   fi
 
   if [ -f $BASEDIR/pellcorp-backups/grumpyscreen.cfg ]; then
-    cp $BASEDIR/pellcorp-backups/grumpyscreen.cfg $BASEDIR/printer_data/config/
+    cp $BASEDIR/pellcorp-backups/grumpyscreen.cfg $BASEDIR/printer_data/config/grumpyscreen.ini
 
     # we want grumpyscreen.cfg to be editable from fluidd / mainsail we do that with a soft link
-    ln -sf $BASEDIR/printer_data/config/grumpyscreen.cfg $BASEDIR/guppyscreen/
+    ln -sf $BASEDIR/printer_data/config/grumpyscreen.ini $BASEDIR/guppyscreen/grumpyscreen.cfg
+
+    [ -f $BASEDIR/printer_data/config/grumpyscreen.cfg ] && rm $BASEDIR/printer_data/config/grumpyscreen.cfg
+  fi
+
+  # si that you can print
+  if [ ! -L $BASEDIR/printer_data/gcodes/usb ]; then
+    ln -sf /media/usb $BASEDIR/printer_data/gcodes/usb
   fi
 
   cp $BASEDIR/pellcorp/rpi/services/cursor.sh $BASEDIR/guppyscreen/
   sudo cp $BASEDIR/pellcorp/rpi/services/grumpyscreen.service /etc/systemd/system/ || exit $?
   sudo sed -i "s:\$HOME:$BASEDIR:g" /etc/systemd/system/grumpyscreen.service
   sudo sed -i "s:User=pi:User=$USER:g" /etc/systemd/system/grumpyscreen.service
+  sed -i "s~support_zip_cmd:.*~support_zip_cmd: $BASEDIR/pellcorp/tools/support.sh~g" $BASEDIR/printer_data/config/grumpyscreen.ini
+  sed -i "s~factory_reset_cmd:.*~support_zip_cmd:~g" $BASEDIR/printer_data/config/grumpyscreen.ini
+  # the current grumpy release fucks this up so clean it up for rpi
+  sed -i "s~factory_reset_cmd:.*~factory_reset_cmd:~g" $BASEDIR/printer_data/config/grumpyscreen.ini
   sudo systemctl daemon-reload
   sudo systemctl enable grumpyscreen
-  sudo systemctl restart grumpyscreen
 
   echo "grumpyscreen" >> $BASEDIR/pellcorp.done
 fi

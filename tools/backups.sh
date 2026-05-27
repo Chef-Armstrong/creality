@@ -75,6 +75,11 @@ if [ "$mode" = "create" ]; then
         CFG_ARG='printer_data/config/*.cfg'
     fi
 
+    INI_ARG=''
+    if ls printer_data/config/*.ini > /dev/null 2>&1; then
+        INI_ARG='printer_data/config/*.ini'
+    fi
+
     CONF_ARG=''
     if ls printer_data/config/*.conf > /dev/null 2>&1; then
         CONF_ARG='printer_data/config/*.conf'
@@ -96,7 +101,7 @@ if [ "$mode" = "create" ]; then
     fi
 
     if [ -n "$CFG_ARG" ] || [ -n "$CONF_ARG" ] || [ -n "$PELLCORP_BACKUPS" ] || [ -n "$PELLCORP_OVERRIDES" ] || [ -n "$PELLCORP_DONE" ]; then
-        tar -zcf $BASEDIR/backups/backup-${TIMESTAMP}.tar.gz $CFG_ARG $CONF_ARG $PELLCORP_BACKUPS $PELLCORP_OVERRIDES $PELLCORP_DONE
+        tar -zcf $BASEDIR/backups/backup-${TIMESTAMP}.tar.gz $CFG_ARG $INI_ARG $CONF_ARG $PELLCORP_BACKUPS $PELLCORP_OVERRIDES $PELLCORP_DONE
         sync
     fi
 
@@ -161,6 +166,13 @@ elif [ "$mode" = "restore" ] && [ -f $BASEDIR/backups/$restore ]; then
             rm -rf $BASEDIR/pellcorp-backups.old
         fi
         mv $BASEDIR/pellcorp-backups $BASEDIR/pellcorp-backups.old
+    fi
+
+    if [ -d "$BASEDIR/printer_data/config" ]; then
+        if [ -d $BASEDIR/printer_data/config.old ]; then
+            rm -rf $BASEDIR/printer_data/config.old
+        fi
+        mv $BASEDIR/printer_data/config $BASEDIR/printer_data/config.old
     fi
 
     echo "Restoring $restore ..."

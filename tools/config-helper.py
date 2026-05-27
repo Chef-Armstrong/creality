@@ -227,6 +227,9 @@ def main():
     opts.add_option("", "--add-include", dest="add_include", nargs=1, type="string")
     opts.add_option("", "--include-exists", dest="include_exists", nargs=1, type="string")
     opts.add_option("", "--section-exists", dest="section_exists", nargs=1, type="string")
+    opts.add_option("", "--list-sections", dest="list_exists", nargs=1, type="string")
+    opts.add_option("", "--includes-exist", dest="includes_exist", default=False, action='store_true')
+    opts.add_option("", "--sections", dest="sections", default=False, action='store_true')
     opts.add_option("", "--add-section", dest="add_section", nargs=1, type="string")
     opts.add_option("", "--ignore-missing", dest="ignore_missing", default=False, action='store_true')
     opts.add_option("", "--overrides", dest="overrides", nargs=1, type="string")
@@ -274,7 +277,7 @@ def main():
     fan_control = 'fan_control.cfg' == os.path.basename(config_file)
     webcam_conf = 'webcam.conf' == os.path.basename(config_file)
     crowsnest_conf = 'crowsnest.conf' == os.path.basename(config_file)
-    grumpyscreen_cfg = 'grumpyscreen.cfg' == os.path.basename(config_file)
+    grumpyscreen_cfg = 'grumpyscreen.cfg' == os.path.basename(config_file) or 'grumpyscreen.ini' == os.path.basename(config_file)
 
     updated = False
     if options.remove_section:
@@ -309,11 +312,30 @@ def main():
             exit_code = 0
         else:
             exit_code = 1
+    elif options.sections:
+        for section in updater.sections():
+            if 'include ' not in section:
+                print(section)
+        exit_code = 0
+    elif options.list_exists:
+        search = options.list_exists
+        if search.endswith("%"):
+            search = search[:-1]
+            for section in updater.sections():
+                if section.startswith(search):
+                    print(section)
     elif options.section_exists:
         if updater.has_section(options.section_exists):
             exit_code = 0
         else:
             exit_code = 1
+    elif options.includes_exist:
+        exit_code = 1
+        for section in updater.sections():
+            if 'include ' in section:
+                exit_code = 0
+                break
+
     elif options.replace_section_entry:
         updated = replace_section_value(updater, options.replace_section_entry[0], options.replace_section_entry[1], options.replace_section_entry[2])
     elif options.remove_include:
@@ -331,7 +353,7 @@ def main():
         if os.path.exists(options.overrides):
             include_sections = options.include_sections.split(',') if options.include_sections else None
             exclude_sections = options.exclude_sections.split(',') if options.exclude_sections else None
-            allow_delete_section = (printer_cfg or fan_control or grumpyscreen_cfg)
+            allow_delete_section = (moonraker_conf or printer_cfg or fan_control or grumpyscreen_cfg)
             allow_delete_entry = printer_cfg
             allow_new_section = (fan_control or printer_cfg or moonraker_conf or webcam_conf or crowsnest_conf or grumpyscreen_cfg)
             updated = override_cfg(updater, options.overrides,

@@ -1,7 +1,7 @@
 #!/bin/sh
 
 # this allows us to make changes to Simple AF and grumpyscreen in parallel
-GRUMPYSCREEN_TIMESTAMP=1764856400
+GRUMPYSCREEN_TIMESTAMP=1779138100
 GRUMPYSCREEN_BRANCH=main
 
 if [ -f /usr/bin/get_sn_mac.sh ]; then
@@ -14,10 +14,21 @@ if [ -f /usr/bin/get_sn_mac.sh ]; then
     model=k1
   elif [ "$MODEL" = "CR-K1 Max" ] || [ "$MODEL" = "K1 Max SE" ]; then
     model=k1m
+  elif [ "$MODEL" = "F001" ] || [ "$MODEL" = "F002" ]; then
+    echo
+    echo "WARNING: Ender 3 V3 printer support is VERY experimental!!!"
+    echo
+    model=f001
   elif [ "$MODEL" = "F004" ]; then
     model=f004
   elif [ "$MODEL" = "F005" ]; then
     model=f005
+    # this piece of hackery is just for my Ender 3 V3 SE which has a Nebula Pad and a KE board but a SE toolhead
+    if [ -f /usr/data/creality/userdata/config/system_config.json ]; then
+      if [ "$PRINTER_MODEL" = "Ender-3 V3 SE" ]; then
+        model=e3v3se
+      fi
+    fi
   elif [ "$MODEL" = "NEBULA" ]; then
     if [ -f /usr/data/creality/userdata/config/system_config.json ]; then
       PRINTER_MODEL=$(grep -r model_str /usr/data/creality/userdata/config/system_config.json | awk -F: '{print $2}' | grep -o '".*"' | tr -d '"')
@@ -41,7 +52,7 @@ else
 fi
 
 # we only need to verify we are not trying to install on really old k1 firmware
-if [ "$MODEL" != "F004" ] && [ "$MODEL" != "F005" ] && [ "$MODEL" != "NEBULA" ]; then
+if [ "$MODEL" != "F001" ] && [ "$MODEL" != "F002" ] && [ "$MODEL" != "F004" ] && [ "$MODEL" != "F005" ] && [ "$MODEL" != "NEBULA" ]; then
     # 6. prefix is the prefix I use for pre-rooted firmware
     ota_version=$(cat /etc/ota_info | grep ota_version | awk -F '=' '{print $2}' | sed 's/^6.//g' | tr -d '.')
     if [ -z "$ota_version" ] || [ $ota_version -lt 1335 ]; then
@@ -63,7 +74,7 @@ rm -rf /root/.cache
 sync
 
 # the installer can switch branches even on a helper script printer
-if [ "$1" != "--branch" ] || [ "$1" != "--update-branch" ]; then
+if [ "$1" != "--branch" ] && [ "$1" != "--update-branch" ]; then
   if [ -d /usr/data/helper-script ] || [ -f /usr/data/fluidd.sh ] || [ -f /usr/data/mainsail.sh ]; then
       if [ -f /usr/data/pellcorp.done ]; then
           echo "FATAL: You have broken your Simple AF install by corrupting it with Helper Script!"
@@ -115,8 +126,9 @@ else
 fi
 echo
 
-cp /usr/data/pellcorp/k1/services/S45cleanup /etc/init.d || exit $?
-cp /usr/data/pellcorp/k1/services/S58factoryreset /etc/init.d || exit $?
+cp /usr/data/pellcorp/k1/services/S58wpa_supplicant /etc/init.d/ || exit $?
+cp /usr/data/pellcorp/k1/services/S45cleanup /etc/init.d/ || exit $?
+cp /usr/data/pellcorp/k1/services/S58factoryreset /etc/init.d/ || exit $?
 cp /usr/data/pellcorp/k1/services/S50dropbear /etc/init.d/ || exit $?
 sync
 
@@ -199,17 +211,27 @@ function update_repo() {
 }
 
 function update_klipper() {
-  if [ -d /usr/data/cartographer-klipper ] && [ -L /usr/data/klipper/klippy/extras/scanner.py ]; then
+  probe=$(cat /usr/data/pellcorp.done 2> /dev/null | grep "\-probe" | awk -F '-' '{print $1}')
+
+  if [ "$probe" = "cartotouch" ] && [ -d /usr/data/cartographer-klipper ]; then
       /usr/data/cartographer-klipper/install.sh || return $?
       ln -sf /usr/data/cartographer-klipper/ /root
-      sync
   fi
-  if [ -d /usr/data/beacon-klipper ] && [ -L /usr/data/klipper/klippy/extras/beacon.py ]; then
+
+  if [ "$probe" = "beacon" ] && [ -d /usr/data/beacon-klipper ]; then
       /usr/data/pellcorp/k1/beacon-install.sh || return $?
       ln -sf /usr/data/beacon-klipper/ /root
-      sync
   fi
+
+  if [ "$probe" = "cartographer" ]; then
+      curl -s -L https://raw.githubusercontent.com/Cartographer3D/cartographer3d-plugin/refs/heads/main/scripts/install.sh | bash -s -- --klipper /usr/data/klipper --klippy-env /usr/share/klippy-env || exit $?
+  fi
+
+  echo
   /usr/share/klippy-env/bin/python3 -m compileall /usr/data/klipper/klippy || return $?
+
+  sync
+
   /usr/data/pellcorp/k1/tools/check-firmware.sh --status
   if [ $? -eq 0 ]; then
       echo "INFO: Restarting Klipper ..."
@@ -240,6 +262,12 @@ function install_config_updater() {
 }
 
 function disable_creality_services() {
+    # for some reason and I don't really understand why pip is getting deleted from klippy-env lets restore it
+    if [ ! -f /usr/share/klippy-env/bin/pip ] && [ -e /overlay/upper/usr/share/klippy-env/bin/pip ]; then
+      rm /overlay/upper/usr/share/klippy-env/bin/pip*
+      mount -o remount /
+    fi
+
     if [ ! -L /etc/boot-display/part0 ]; then
       # clean up failed installation of custom boot display
       rm -rf /overlay/upper/etc/boot-display/*
@@ -259,7 +287,7 @@ function disable_creality_services() {
         echo
         echo "INFO: Disabling some creality services ..."
 
-        echo "INFO: If you reboot the printer before installing grumpyscreen, the screen will be blank - this is to be expected!"
+        echo "INFO: The screen will be blank until the installer finishes"
         /etc/init.d/S99start_app stop > /dev/null 2>&1
         rm /etc/init.d/S99start_app
 
@@ -388,12 +416,12 @@ function install_webcam() {
 
     grep -q "webcam" /usr/data/pellcorp.done
     if [ $? -ne 0 ]; then
-      INPUT_TYPE=uvc
-      if [ "$mode" != "update" ] || [ ! -d /usr/data/mjpg-streamer ]; then
-        if [ -f /etc/init.d/S50webcam ]; then
-          /etc/init.d/S50webcam stop > /dev/null 2>&1
-        fi
+      # lets always stop and start the webcam
+      if [ -f /etc/init.d/S50webcam ]; then
+        /etc/init.d/S50webcam stop > /dev/null 2>&1
+      fi
 
+      if [ "$mode" != "update" ] || [ ! -d /usr/data/mjpg-streamer ]; then
         if [ -f /opt/bin/mjpg_streamer ]; then
           echo "INFO: Removing entware mjpg_streamer"
           /opt/bin/opkg remove --force-removal-of-dependent-packages mjpg-streamer mjpg-streamer-input-http mjpg-streamer-input-uvc mjpg-streamer-output-http mjpg-streamer-www 2> /dev/null
@@ -402,15 +430,15 @@ function install_webcam() {
         if [ -d /usr/data/mjpg-streamer ]; then
           rm -rf /usr/data/mjpg-streamer
         fi
+
+        if [ -d /usr/data/ustreamer ]; then
+          rm -rf /usr/data/ustreamer
+        fi
       fi
 
-      if [ ! -d /usr/data/mjpg-streamer ]; then
-        echo
-        echo "INFO: Installing mjpg-streamer ..."
-        curl -L "https://github.com/pellcorp/k1-mjpg-streamer/releases/download/main/mjpg-streamer.tar.gz" -o /usr/data/mjpg-streamer.tar.gz
-        tar -zxf /usr/data/mjpg-streamer.tar.gz -C /usr/data/ || exit $?
-        rm /usr/data/mjpg-streamer.tar.gz
-      fi
+      # just update them every time
+      mkdir -p /usr/data/ustreamer
+      tar -zxf /usr/data/pellcorp/k1/packages/ustreamer.tar.gz -C /usr/data/ustreamer/ || exit $?
 
       echo
       echo "INFO: Updating webcam config ..."
@@ -424,26 +452,11 @@ function install_webcam() {
       cp /usr/data/pellcorp/k1/files/auto_uvc.sh /usr/bin/
       chmod 777 /usr/bin/auto_uvc.sh
 
-      if [ -f /etc/init.d/S50webcam ]; then
-        CURRENT_INPUT_TYPE=$(cat /etc/init.d/S50webcam | grep INPUT_TYPE= | awk -F '=' '{print $2}')
-        if [ -n "$CURRENT_INPUT_TYPE" ]; then
-          INPUT_TYPE=$CURRENT_INPUT_TYPE
-        fi
-      fi
-      cp /usr/data/pellcorp/k1/services/S50webcam /etc/init.d/
-      if [ "$INPUT_TYPE" != "uvc" ]; then
-        sed -i "s/INPUT_TYPE=uvc/INPUT_TYPE=$INPUT_TYPE/g" /etc/init.d/S50webcam
-      fi
-      /etc/init.d/S50webcam start
-
-      if [ -f /usr/data/pellcorp.ipaddress ]; then
-        # don't wipe the pellcorp.ipaddress if its been explicitly set to skip
-        PREVIOUS_IP_ADDRESS=$(cat /usr/data/pellcorp.ipaddress 2> /dev/null)
-        if [ "$PREVIOUS_IP_ADDRESS" != "skip" ]; then
-          rm /usr/data/pellcorp.ipaddress
-        fi
-      fi
+      cp /usr/data/pellcorp/k1/services/S50webcam /etc/init.d/ || exit $?
+      cp /usr/data/pellcorp/k1/webcam.ini /usr/data/printer_data/config/ || exit $?
       cp /usr/data/pellcorp/k1/webcam.conf /usr/data/printer_data/config/ || exit $?
+
+      /etc/init.d/S50webcam start
 
       echo "webcam" >> /usr/data/pellcorp.done
       sync
@@ -485,11 +498,14 @@ function install_moonraker() {
             cd /usr/data/moonraker
             MOONRAKER_URL=$(git remote get-url origin)
             cd - > /dev/null
-            if [ "$MOONRAKER_URL" != "https://github.com/pellcorp/moonraker.git" ]; then
-                echo "INFO: Forcing moonraker to switch to pellcorp/moonraker"
+            if [ "$MOONRAKER_URL" != "https://github.com/Arksine/moonraker.git" ]; then
+                echo
+                echo "INFO: Forcing moonraker to switch to Arksine/moonraker"
                 rm -rf /usr/data/moonraker
             fi
         fi
+
+        cp /usr/data/pellcorp/k1/moonraker.conf /usr/data/printer_data/config/ || exit $?
 
         if [ ! -d /usr/data/moonraker/.git ]; then
             echo "INFO: Installing moonraker ..."
@@ -498,7 +514,14 @@ function install_moonraker() {
             [ -d /usr/data/moonraker-env ] && rm -rf /usr/data/moonraker-env
 
             echo
-            git clone https://github.com/pellcorp/moonraker.git /usr/data/moonraker || exit $?
+            git clone https://github.com/Arksine/moonraker.git /usr/data/moonraker || exit $?
+
+            # to protect against bricking we want to keep control of what commit we support
+            cd /usr/data/moonraker
+            MOONRAKER_PINNED_COMMIT=$($CONFIG_HELPER --file moonraker.conf --get-section-entry "update_manager moonraker" "pinned_commit")
+            git reset --hard $MOONRAKER_PINNED_COMMIT
+            cd - > /dev/null
+
             if [ -f /usr/data/moonraker-database.tar.gz ]; then
                 echo
                 echo "INFO: Restoring moonraker database ..."
@@ -538,7 +561,6 @@ function install_moonraker() {
         ln -sf /usr/data/pellcorp/k1/tools/systemctl /usr/bin/ || exit $?
         ln -sf /usr/data/pellcorp/k1/tools/sudo /usr/bin/ || exit $?
         cp /usr/data/pellcorp/k1/services/S56moonraker_service /etc/init.d/ || exit $?
-        cp /usr/data/pellcorp/k1/moonraker.conf /usr/data/printer_data/config/ || exit $?
         ln -sf /usr/data/pellcorp/k1/moonraker.asvc /usr/data/printer_data/ || exit $?
 
         ln -sf /usr/data/moonraker-timelapse/component/timelapse.py /usr/data/moonraker/moonraker/components/ || exit $?
@@ -698,6 +720,7 @@ function install_klipper() {
         if [ -d /usr/data/klipper/.git ]; then
             cd /usr/data/klipper/
             remote_repo=$(git remote get-url origin | awk -F '/' '{print $NF}' | sed 's/.git//g')
+            branch_ref=$(git rev-parse --abbrev-ref HEAD)
             cd - > /dev/null
 
             # this old repo is no longer supported
@@ -710,13 +733,13 @@ function install_klipper() {
         if [ ! -d /usr/data/klipper/.git ]; then
             echo "INFO: Installing klipper ..."
             git clone https://github.com/pellcorp/klipper.git /usr/data/klipper || exit $?
+
             [ -d /usr/share/klipper ] && rm -rf /usr/share/klipper
         else
             cd /usr/data/klipper/
             branch_ref=$(git rev-parse --abbrev-ref HEAD)
             remote_repo=$(git remote get-url origin | awk -F '/' '{print $NF}' | sed 's/.git//g')
-            git log | grep -q "support M106 P argument thanks to Chad"
-            klipper_status=$?
+            klipper_status=0
             cd - > /dev/null
 
             # force update
@@ -724,12 +747,33 @@ function install_klipper() {
               klipper_status=1
             fi
 
-            # force klipper update to get reverted kinematic position feature
-            if [ "$remote_repo" = "klipper" ] && [ $klipper_status -ne 0 ] && [ "$branch_ref" = "master" ]; then
-                echo "INFO: Forcing update of klipper to latest master"
-                update_repo /usr/data/klipper master || exit $?
+            # force switch to jun2025 branch
+            if [ "$branch_ref" = "master" ]; then
+              klipper_status=1
+            fi
+
+            if [ "$remote_repo" = "klipper" ] && [ $klipper_status -ne 0 ]; then
+                echo "INFO: Forcing update of klipper to branch jun2025"
+                update_repo /usr/data/klipper jun2025 || exit $?
+                update_klipper
             fi
         fi
+
+        cd /usr/data/klipper/
+        branch_ref=$(git rev-parse --abbrev-ref HEAD)
+        if [ "$branch_ref" = "jun2025" ]; then
+          KLIPPER_PINNED_COMMIT=$($CONFIG_HELPER --file moonraker.conf --get-section-entry "update_manager klipper" "pinned_commit")
+          KLIPPER_CURRENT_COMMIT=$(git rev-parse HEAD)
+          if [ "$KLIPPER_PINNED_COMMIT" != "$KLIPPER_CURRENT_COMMIT" ]; then
+            git fetch
+            git reset --hard $KLIPPER_PINNED_COMMIT
+
+            if [ "$mode" = "update" ]; then
+              update_klipper
+            fi
+          fi
+        fi
+        cd - > /dev/null
 
         # get rid of kamp
         if [ -e /usr/data/printer_data/config/KAMP ]; then
@@ -745,7 +789,6 @@ function install_klipper() {
         fi
 
         echo "INFO: Updating klipper config ..."
-        /usr/share/klippy-env/bin/python3 -m compileall /usr/data/klipper/klippy || exit $?
 
         ln -sf /usr/data/klipper /usr/share/ || exit $?
 
@@ -761,34 +804,46 @@ function install_klipper() {
         
         cp /usr/data/pellcorp/k1/services/S55klipper_service /etc/init.d/ || exit $?
 
-        # currently no support for updating firmware on Ender 5 Max or Ender 3 V3 KE!
-        if [ "$MODEL" != "F004" ] && [ "$MODEL" != "F005" ] && [ "$MODEL" != "NEBULA" ]; then
+        # currently no support for updating firmware on a Nebula Pad
+        if [ "$MODEL" != "NEBULA" ]; then
             cp /usr/data/pellcorp/k1/services/S13mcu_update /etc/init.d/ || exit $?
         fi
 
-        cp /usr/data/pellcorp/config/sensorless.cfg /usr/data/printer_data/config/ || exit $?
-        $CONFIG_HELPER --add-include "sensorless.cfg" || exit $?
+        # this is just temporary to make things a bit simpler initially for Ender 3 V3
+        if [ -f /usr/data/pellcorp/k1/homing.${model}.cfg ]; then
+          cp /usr/data/pellcorp/k1/homing.${model}.cfg /usr/data/printer_data/config/homing.cfg || exit $?
+        else
+          cp /usr/data/pellcorp/config/homing.cfg /usr/data/printer_data/config/ || exit $?
+        fi
+        $CONFIG_HELPER --add-include "homing.cfg" || exit $?
 
         x_position_mid=$($CONFIG_HELPER --get-section-entry "stepper_x" "position_max" --divisor 2 --integer)
-        $CONFIG_HELPER --file sensorless.cfg --replace-section-entry "gcode_macro _SENSORLESS_PARAMS" "variable_home_x" "$x_position_mid" || exit $?
+        $CONFIG_HELPER --file homing.cfg --replace-section-entry "gcode_macro _HOMING_PARAMS" "variable_home_x" "$x_position_mid" || exit $?
 
         y_position_mid=$($CONFIG_HELPER --get-section-entry "stepper_y" "position_max" --divisor 2 --integer)
-        $CONFIG_HELPER --file sensorless.cfg --replace-section-entry "gcode_macro _SENSORLESS_PARAMS" "variable_home_y" "$y_position_mid" || exit $?
+        $CONFIG_HELPER --file homing.cfg --replace-section-entry "gcode_macro _HOMING_PARAMS" "variable_home_y" "$y_position_mid" || exit $?
 
         # just make sure the baud is written
         $CONFIG_HELPER --replace-section-entry "mcu" "baud" 230400 || exit $?
         $CONFIG_HELPER --replace-section-entry "mcu nozzle_mcu" "baud" 230400 || exit $?
 
+        # we need the levelling mcu for Ender 3 V3 for ADXL
+        if [ "$MODEL" != "F001" ] && [ "$MODEL" != "F002" ]; then
+          $CONFIG_HELPER --remove-section "mcu leveling_mcu" || exit $?
+        else
+          $CONFIG_HELPER --replace-section-entry "mcu leveling_mcu" "baud" 230400 || exit $?
+        fi
+
         kinematics=$($CONFIG_HELPER --get-section-entry "printer" "kinematics")
 
-        # for Ender 5 Max we need to disable sensorless homing, reversing homing order,don't move away and do not repeat homing
+        # for Ender 5 Max we need to disable sensorless homing, reversing homing order, don't move away and do not repeat homing
         # but we are still going to use homing override even though the max has physical endstops to make things a bit easier
         if [ "$MODEL" = "F004" ]; then
-            $CONFIG_HELPER --file sensorless.cfg --replace-section-entry "gcode_macro _SENSORLESS_PARAMS" "variable_home_y_before_x" "True" || exit $?
+            $CONFIG_HELPER --file homing.cfg --replace-section-entry "gcode_macro _HOMING_PARAMS" "variable_home_y_before_x" "True" || exit $?
         fi
 
         if [ "$kinematics" = "corexy" ]; then # by default we want to home twice when using sensorless
-            $CONFIG_HELPER --file sensorless.cfg --replace-section-entry "gcode_macro _SENSORLESS_PARAMS" "variable_repeat_home_xy" "True" || exit $?
+            $CONFIG_HELPER --file homing.cfg --replace-section-entry "gcode_macro _HOMING_PARAMS" "variable_repeat_home_xy" "True" || exit $?
         fi
 
         cp /usr/data/pellcorp/k1/internal_macros.cfg /usr/data/printer_data/config/ || exit $?
@@ -797,32 +852,27 @@ function install_klipper() {
         cp /usr/data/pellcorp/config/useful_macros.cfg /usr/data/printer_data/config/ || exit $?
         $CONFIG_HELPER --add-include "useful_macros.cfg" || exit $?
 
+        # mcu rpi is used for adxl on ender 3 v3 ke and nebula pad (currently only a ender 3 v3 se) but otherwise
+        # serves no purpose and takes up resources so remove it except for those printers.
         if [ "$MODEL" != "F005" ] && [ "$MODEL" != "NEBULA" ]; then
-          # the klipper_mcu is not even used, so just get rid of it
           $CONFIG_HELPER --remove-section "mcu rpi" || exit $?
         fi
 
         cp /usr/data/pellcorp/k1/belts_calibration.cfg /usr/data/printer_data/config/ || exit $?
         $CONFIG_HELPER --add-include "belts_calibration.cfg" || exit $?
 
-        # ender 5 max does not support ADXL in the toolhead and bed because of klipper
-        # version incompatibility, for Ender 3 V3 KE we are hoping to use the nebula
-        # ADXL adaptors and that requires klipper mcu, so if the klipper mcu is
-        # still enabled leave the adxl config intact
-        remove_adxl=false
         if [ "$MODEL" = "F004" ]; then
-          remove_adxl=true
-        elif [ "$MODEL" = "F005" ] && [ "$MODEL" != "NEBULA" ] && [ ! -f /etc/init.d/S57klipper_mcu ]; then
-          remove_adxl=true
-        fi
+          # new versions of Ender 5 Max firmware added accel_chip_proxy to replace adxl
+          $CONFIG_HELPER --remove-section "accel_chip_proxy" || exit $?
 
-        if [ "$remove_adxl" = "true" ]; then
-          # for ender 5 max we can't use on board adxl and only beacon and cartotouch support
-          # for Ender 3 V3 KE we have more work to do to support the nebula pad adxl in the future
-          if [ "$probe" != "beacon" ] && [ "$probe" != "cartotouch" ]; then
-              $CONFIG_HELPER --remove-section "adxl345" || exit $?
-              $CONFIG_HELPER --remove-section "resonance_tester" || exit $?
-          fi
+          $CONFIG_HELPER --add-section "adxl345"
+          $CONFIG_HELPER --replace-section-entry "adxl345" "cs_pin" "nozzle_mcu:PA4" || exit $?
+          $CONFIG_HELPER --replace-section-entry "adxl345" "axes_map" "x,-z,y" || exit $?
+          $CONFIG_HELPER --replace-section-entry "adxl345" "spi_speed" "5000000" || exit $?
+          $CONFIG_HELPER --replace-section-entry "adxl345" "spi_software_sclk_pin" "nozzle_mcu:PA5" || exit $?
+          $CONFIG_HELPER --replace-section-entry "adxl345" "spi_software_mosi_pin" "nozzle_mcu:PA7" || exit $?
+          $CONFIG_HELPER --replace-section-entry "adxl345" "spi_software_miso_pin" "nozzle_mcu:PA6" || exit $?
+          $CONFIG_HELPER --replace-section-entry "resonance_tester" "accel_chip" "adxl345" || exit $?
         fi
 
         # F004, F005 and NEBULA already have the /usr/bin/beep command
@@ -838,7 +888,7 @@ function install_klipper() {
         $CONFIG_HELPER --remove-section "dirzctl" || exit $?
         $CONFIG_HELPER --remove-section "accel_chip_proxy" || exit $?
         $CONFIG_HELPER --remove-section "z_compensate" || exit $?
-        $CONFIG_HELPER --remove-section "mcu leveling_mcu" || exit $?
+
         $CONFIG_HELPER --remove-section "bl24c16f" || exit $?
         $CONFIG_HELPER --remove-section "prtouch_v2" || exit $?
         $CONFIG_HELPER --remove-section "output_pin power" || exit $?
@@ -852,6 +902,7 @@ function install_klipper() {
         $CONFIG_HELPER --remove-section-entry "tmc2209 stepper_x" "hold_current" || exit $?
         $CONFIG_HELPER --remove-section-entry "tmc2209 stepper_y" "hold_current" || exit $?
 
+        $CONFIG_HELPER --remove-include "sensorless.cfg" || exit $?
         $CONFIG_HELPER --remove-include "printer_params.cfg" || exit $?
         $CONFIG_HELPER --remove-include "gcode_macro.cfg" || exit $?
         $CONFIG_HELPER --remove-include "custom_gcode.cfg" || exit $?
@@ -876,19 +927,21 @@ function install_klipper() {
         cp /usr/data/pellcorp/config/start_end.cfg /usr/data/printer_data/config/ || exit $?
         $CONFIG_HELPER --add-include "start_end.cfg" || exit $?
 
-        if [ "$probe" != "beacon" ] && [ "$probe" != "cartotouch" ] && [ "$probe" != "eddyng" ]; then
+        if [ "$probe" != "beacon" ] && [ "$probe" != "cartotouch" ] && [ "$probe" != "eddyng" ] && [ "$probe" != "cartographer" ] && [ "$probe" != "btteddy" ]; then
             $CONFIG_HELPER --file start_end.cfg --replace-section-entry "gcode_macro _START_END_PARAMS" "variable_start_print_bed_heating_move_bed_distance" "0" || exit $?
         fi
 
-        if [ "$kinematics" = "cartesian" ] || [ "$MODEL" = "K1 SE" ]; then
-          # for cartesian no cool down necessary
+        # this is mostly for K1 series (excluding the SE which has no aux fan)
+        if [ "$kinematics" = "cartesian" ] || [ "$kinematics" = "corexz" ] || [ "$MODEL" = "K1 SE" ]; then
           $CONFIG_HELPER --file start_end.cfg --replace-section-entry "gcode_macro _START_END_PARAMS" "variable_end_print_cool_down" "False" || exit $?
         fi
 
-        ln -sf /usr/data/pellcorp/config/Line_Purge.cfg /usr/data/printer_data/config/ || exit $?
+        [ -L /usr/data/printer_data/config/Line_Purge.cfg ] && rm /usr/data/printer_data/config/Line_Purge.cfg
+        cp /usr/data/pellcorp/config/Line_Purge.cfg /usr/data/printer_data/config/ || exit $?
         $CONFIG_HELPER --add-include "Line_Purge.cfg" || exit $?
 
-        ln -sf /usr/data/pellcorp/config/Smart_Park.cfg /usr/data/printer_data/config/ || exit $?
+        [ -L /usr/data/printer_data/config/Smart_Park.cfg ] && rm /usr/data/printer_data/config/Smart_Park.cfg
+        cp /usr/data/pellcorp/config/Smart_Park.cfg /usr/data/printer_data/config/ || exit $?
         $CONFIG_HELPER --add-include "Smart_Park.cfg" || exit $?
 
         if [ -f /usr/data/pellcorp/k1/fan_control.${model}.cfg ]; then
@@ -914,7 +967,7 @@ function install_klipper() {
             $CONFIG_HELPER --remove-section "output_pin col_pwm" || exit $?
             $CONFIG_HELPER --remove-section "output_pin col" || exit $?
             $CONFIG_HELPER --remove-section "heater_fan nozzle_fan" || exit $?
-        elif [ "$MODEL" = "F005" ]; then
+        elif [ "$MODEL" = "F005" ] || [ "$MODEL" = "NEBULA" ]; then
           $CONFIG_HELPER --remove-section "output_pin MainBoardFan" || exit $?
           $CONFIG_HELPER --remove-section "heater_fan nozzle_fan" || exit $?
           $CONFIG_HELPER --remove-section "bltouch" || exit $?
@@ -960,36 +1013,36 @@ function install_klipper() {
         # just in case its missing from stock printer.cfg make sure it gets added
         $CONFIG_HELPER --add-section "exclude_object" || exit $?
 
-        if [ "$mode" != "update" ] && [ -d /usr/data/fluidd-config ]; then
+        if [ -d /usr/data/fluidd-config ]; then
             rm -rf /usr/data/fluidd-config
         fi
-
-        if [ ! -d /usr/data/fluidd-config ]; then
-            echo
-            echo "INFO: Updating client macros ..."
-
-            git clone https://github.com/fluidd-core/fluidd-config.git /usr/data/fluidd-config || exit $?
-        fi
-
-        [ -e /usr/data/printer_data/config/fluidd.cfg ] && rm /usr/data/printer_data/config/fluidd.cfg
-
-        ln -sf /usr/data/fluidd-config/client.cfg /usr/data/printer_data/config/
+        [ -L /usr/data/printer_data/config/client.cfg ] && rm /usr/data/printer_data/config/client.cfg
+        cp /usr/data/pellcorp/config/client.cfg /usr/data/printer_data/config/
         $CONFIG_HELPER --add-include "client.cfg" || exit $?
 
         # for moonraker to be able to use moonraker fluidd/mainsail client.cfg out of the box need to
         # have $HOME/printer_data resolve correctly.
         ln -sf /usr/data/printer_data/ /root
 
-        # these are already defined in fluidd config so get rid of them from printer.cfg
+        # these are already defined in client.cfg so get rid of them from printer.cfg
         $CONFIG_HELPER --remove-section "pause_resume" || exit $?
         $CONFIG_HELPER --remove-section "display_status" || exit $?
         $CONFIG_HELPER --remove-section "virtual_sdcard" || exit $?
 
+        # apply various Ender 3 V3 patches to printer.cfg last thing
+        if [ "$MODEL" = "F002" ] || [ "$MODEL" = "F001" ]; then
+          $CONFIG_HELPER --patches /usr/data/pellcorp/k1/printer.cfg.f001
+        fi
+
         if $CONFIG_HELPER --section-exists "filament_switch_sensor filament_sensor"; then
           $CONFIG_HELPER --replace-section-entry "filament_switch_sensor filament_sensor" "runout_gcode" "_ON_FILAMENT_RUNOUT" || exit $?
+
           # the _ON_FILAMENT_RUNOUT macro is going to be in control of filament runout now and avoid triggering another
           # runout event if already paused
           $CONFIG_HELPER --replace-section-entry "filament_switch_sensor filament_sensor" "pause_on_runout" "false" || exit $?
+
+          # if the filament sensor exists enable the check for filament before trying to print ootb
+          $CONFIG_HELPER --file start_end.cfg --replace-section-entry "gcode_macro _CLIENT_VARIABLE" "variable_runout_sensor" "\"filament_switch_sensor filament_sensor\"" || exit $?
         else
           echo
           echo "WARN: No filament sensor configured skipping on filament runout configuration"
@@ -1084,10 +1137,13 @@ function install_guppyscreen() {
         fi
 
         if [ -f /usr/data/pellcorp-backups/grumpyscreen.cfg ]; then
-          cp /usr/data/pellcorp-backups/grumpyscreen.cfg /usr/data/printer_data/config/
+          # we want an ini file in config directory so that fluidd and mainsail don't provide save and restart button
+          cp /usr/data/pellcorp-backups/grumpyscreen.cfg /usr/data/printer_data/config/grumpyscreen.ini
 
           # we want grumpyscreen.cfg to be editable from fluidd / mainsail we do that with a soft link
-          ln -sf /usr/data/printer_data/config/grumpyscreen.cfg /usr/data/guppyscreen/
+          ln -sf /usr/data/printer_data/config/grumpyscreen.ini /usr/data/guppyscreen/grumpyscreen.cfg
+
+          [ -f /usr/data/printer_data/config/grumpyscreen.cfg ] && rm /usr/data/printer_data/config/grumpyscreen.cfg
         fi
 
         cp /usr/data/pellcorp/k1/services/S99guppyscreen /etc/init.d/ || exit $?
@@ -1156,17 +1212,24 @@ function install_cartographer_plugin() {
 
     grep -q "cartographer-plugin" /usr/data/pellcorp.done
     if [ $? -ne 0 ]; then
+        cp /usr/data/pellcorp/k1/cartographer.conf /usr/data/printer_data/config/ || exit $?
+        $CONFIG_HELPER --file moonraker.conf --add-include "cartographer.conf" || exit $?
+
         # for old style cartographer that is a soft link
         if [ -L /usr/data/klipper/klippy/extras/cartographer.py ]; then
             rm -rf /usr/data/klipper/klippy/extras/cartographer.py
         fi
+
         if [ "$mode" != "update" ] && [ -e /usr/data/klipper/klippy/extras/cartographer.py ]; then
             rm -rf /usr/data/klipper/klippy/extras/cartographer.py
         fi
 
-        if [ ! -f /usr/data/klipper/klippy/extras/cartographer.py ]; then
+        if [ ! -e /usr/data/klipper/klippy/extras/cartographer.py ]; then
             curl -s -L https://raw.githubusercontent.com/Cartographer3D/cartographer3d-plugin/refs/heads/main/scripts/install.sh | bash -s -- --klipper /usr/data/klipper --klippy-env /usr/share/klippy-env || exit $?
         fi
+
+        echo
+        /usr/share/klippy-env/bin/python3 -m compileall /usr/data/klipper/klippy || exit $?
 
         echo "cartographer-plugin" >> /usr/data/pellcorp.done
         sync
@@ -1184,37 +1247,43 @@ function install_cartographer_klipper() {
             rm -rf /usr/data/cartographer-klipper
         fi
 
-        if [ ! -d /usr/data/cartographer-klipper ]; then
-            echo
-            echo "INFO: Installing cartographer-klipper ..."
-            git clone https://github.com/pellcorp/cartographer-klipper.git /usr/data/cartographer-klipper || exit $?
-        else
-            cd /usr/data/cartographer-klipper
-            REMOTE_URL=$(git remote get-url origin)
-            if [ "$REMOTE_URL" != "https://github.com/pellcorp/cartographer-klipper.git" ]; then
-                echo "INFO: Switching cartographer-klipper to pellcorp fork"
-                git remote set-url origin https://github.com/pellcorp/cartographer-klipper.git
-                git fetch origin
-            fi
+        echo
+        if [ -d /usr/data/cartographer-klipper ]; then
+          cd /usr/data/cartographer-klipper
+          REMOTE_URL=$(git remote get-url origin)
+          cd ~ > /dev/null
 
-            branch=$(git rev-parse --abbrev-ref HEAD)
-            # do not stuff up a different branch
-            if [ "$branch" = "master" ]; then
-                revision=$(git rev-parse --short HEAD)
-                # reset our branch or update from v1.0.5
-                if [ "$revision" = "303ea63" ] || [ "$revision" = "8324877" ]; then
-                    echo "INFO: Forcing cartographer-klipper update"
-                    git fetch origin
-                    git reset --hard v1.1.0
-                fi
-            fi
+          if [ "$REMOTE_URL" != "https://github.com/cartographer3d/cartographer-klipper.git" ]; then
+              echo "INFO: Switching cartographer-klipper back to cartographer3d/cartographer-klipper"
+              rm -rf /usr/data/cartographer-klipper
+          fi
         fi
-        cd - > /dev/null
+
+        # we are adding a new probe so need to migrate file names
+        if [ -f /usr/data/printer_data/config/cartographer.conf ]; then
+          rm /usr/data/printer_data/config/cartographer.conf || exit $?
+        fi
+        $CONFIG_HELPER --file moonraker.conf --remove-include "cartographer.conf" || exit $?
+
+        cp /usr/data/pellcorp/k1/cartotouch.conf /usr/data/printer_data/config/ || exit $?
+        $CONFIG_HELPER --file moonraker.conf --add-include "cartotouch.conf" || exit $?
+
+        if [ ! -d /usr/data/cartographer-klipper ]; then
+            echo "INFO: Installing cartographer-klipper ..."
+            git clone https://github.com/cartographer3d/cartographer-klipper.git /usr/data/cartographer-klipper || exit $?
+
+            cartotouch_pinned_commit=$($CONFIG_HELPER --file cartotouch.conf --get-section-entry "update_manager cartotouch" "pinned_commit")
+            cd /usr/data/cartographer-klipper
+            git reset --hard $cartotouch_pinned_commit || exit $?
+            cd - > /dev/null
+        fi
 
         echo
         echo "INFO: Running cartographer-klipper installer ..."
         bash /usr/data/cartographer-klipper/install.sh || exit $?
         ln -sf /usr/data/cartographer-klipper/ /root
+
+        echo
         /usr/share/klippy-env/bin/python3 -m compileall /usr/data/klipper/klippy || exit $?
 
         echo "cartographer-klipper" >> /usr/data/pellcorp.done
@@ -1233,14 +1302,24 @@ function install_beacon_klipper() {
             rm -rf /usr/data/beacon-klipper
         fi
 
+        cp /usr/data/pellcorp/k1/beacon.conf /usr/data/printer_data/config/ || exit $?
+        $CONFIG_HELPER --file moonraker.conf --add-include "beacon.conf" || exit $?
+
         if [ ! -d /usr/data/beacon-klipper ]; then
             echo
             echo "INFO: Installing beacon-klipper ..."
             git clone https://github.com/beacon3d/beacon_klipper /usr/data/beacon-klipper || exit $?
+
+            beacon_pinned_commit=$($CONFIG_HELPER --file beacon.conf --get-section-entry "update_manager beacon" "pinned_commit")
+            cd /usr/data/beacon-klipper
+            git reset --hard $beacon_pinned_commit || exit $?
+            cd - > /dev/null
         fi
 
         /usr/data/pellcorp/k1/beacon-install.sh || return $?
         ln -sf /usr/data/beacon-klipper/ /root
+
+        echo
         /usr/share/klippy-env/bin/python3 -m compileall /usr/data/klipper/klippy || exit $?
 
         echo "beacon-klipper" >> /usr/data/pellcorp.done
@@ -1305,13 +1384,14 @@ function setup_bltouch() {
         echo
         echo "INFO: Setting up bltouch/crtouch/3dtouch ..."
 
-        cleanup_probes
-
         cp /usr/data/pellcorp/config/bltouch.cfg /usr/data/printer_data/config/ || exit $?
         $CONFIG_HELPER --add-include "bltouch.cfg" || exit $?
 
         cp /usr/data/pellcorp/config/bltouch_macro.cfg /usr/data/printer_data/config/ || exit $?
         $CONFIG_HELPER --add-include "bltouch_macro.cfg" || exit $?
+
+        # for bltouch probe deploy issues occur with safe z at 3
+        $CONFIG_HELPER --file homing.cfg --replace-section-entry "gcode_macro _HOMING_PARAMS" "variable_safe_z" "5" || exit $?
 
         # need to add a empty bltouch section for baby stepping to work
         $CONFIG_HELPER --remove-section "bltouch" || exit $?
@@ -1337,8 +1417,6 @@ function setup_microprobe() {
     if [ $? -ne 0 ]; then
         echo
         echo "INFO: Setting up microprobe ..."
-
-        cleanup_probes
 
         cp /usr/data/pellcorp/config/microprobe.cfg /usr/data/printer_data/config/ || exit $?
         $CONFIG_HELPER --add-include "microprobe.cfg" || exit $?
@@ -1374,8 +1452,6 @@ function setup_klicky() {
         echo
         echo "INFO: Setting up klicky ..."
 
-        cleanup_probes
-
         cp /usr/data/pellcorp/config/klicky.cfg /usr/data/printer_data/config/ || exit $?
         $CONFIG_HELPER --add-include "klicky.cfg" || exit $?
 
@@ -1407,30 +1483,17 @@ function set_serial_cartotouch() {
         local EXISTING_SERIAL_ID=$($CONFIG_HELPER --file cartotouch.cfg --get-section-entry "scanner" "serial")
         if [ "$EXISTING_SERIAL_ID" != "$SERIAL_ID" ]; then
             $CONFIG_HELPER --file cartotouch.cfg --replace-section-entry "scanner" "serial" "$SERIAL_ID" || exit $?
+            echo "Serial value changed"
             return 1
         else
             echo "Serial value is unchanged"
             return 0
         fi
     else
-        echo "WARNING: There does not seem to be a cartographer attached - skipping auto configuration"
-        return 0
-    fi
-}
-
-function set_serial_cartographer() {
-    local SERIAL_ID=$(ls /dev/serial/by-id/usb-* | grep "IDM\|Cartographer" | head -1)
-    if [ -n "$SERIAL_ID" ]; then
-        local EXISTING_SERIAL_ID=$($CONFIG_HELPER --file cartographer.cfg --get-section-entry "mcu cartographer" "serial")
-        if [ "$EXISTING_SERIAL_ID" != "$SERIAL_ID" ]; then
-            $CONFIG_HELPER --file cartographer.cfg --replace-section-entry "mcu cartographer" "serial" "$SERIAL_ID" || exit $?
-            return 1
-        else
-            echo "Serial value is unchanged"
-            return 0
-        fi
-    else
-        echo "WARNING: There does not seem to be a cartographer attached - skipping auto configuration"
+        echo
+        echo "WARNING: There does not seem to be a cartographer attached - skipping serial auto configuration"
+        echo "  https://pellcorp.github.io/creality-wiki/cartographer_troubleshooting/#manual-cartographer-serial-device-configuration"
+        echo
         return 0
     fi
 }
@@ -1441,22 +1504,11 @@ function setup_cartotouch() {
         echo
         echo "INFO: Setting up cartotouch ..."
 
-        cleanup_probes
-
         # the old calibration macros are no longer supported
         if [ -f /usr/data/printer_data/config/cartographer_calibrate.cfg ]; then
           rm /usr/data/printer_data/config/cartographer_calibrate.cfg || exit $?
         fi
         $CONFIG_HELPER --remove-include "cartographer_calibrate.cfg" || exit $?
-
-        # we are adding a new probe so need to migrate file names
-        if [ -f /usr/data/printer_data/config/cartographer.conf ]; then
-          rm /usr/data/printer_data/config/cartographer.conf || exit $?
-        fi
-        $CONFIG_HELPER --file moonraker.conf --remove-include "cartographer.conf" || exit $?
-
-        cp /usr/data/pellcorp/k1/cartotouch.conf /usr/data/printer_data/config/ || exit $?
-        $CONFIG_HELPER --file moonraker.conf --add-include "cartotouch.conf" || exit $?
 
         cp /usr/data/pellcorp/config/cartotouch_macro.cfg /usr/data/printer_data/config/ || exit $?
         $CONFIG_HELPER --add-include "cartotouch_macro.cfg" || exit $?
@@ -1470,7 +1522,8 @@ function setup_cartotouch() {
         x_position_mid=$($CONFIG_HELPER --get-section-entry "stepper_x" "position_max" --divisor 2 --integer)
         $CONFIG_HELPER --file cartotouch.cfg --replace-section-entry "bed_mesh" "zero_reference_position" "$x_position_mid,$y_position_mid" || exit $?
 
-        set_serial_cartotouch
+        $CONFIG_HELPER --file cartotouch_macro.cfg --replace-section-entry "gcode_macro AXIS_TWIST_COMPENSATION_CALIBRATE" "variable_stop_start_camera" "True" || exit $?
+        $CONFIG_HELPER --file cartotouch_macro.cfg --replace-section-entry "gcode_macro _CARTOGRAPHER_TOUCH" "variable_stop_start_camera" "True" || exit $?
 
         # a slight change to the way cartotouch is configured
         $CONFIG_HELPER --remove-section "force_move" || exit $?
@@ -1494,20 +1547,6 @@ function setup_cartotouch() {
             $CONFIG_HELPER --replace-section-entry "scanner" "mode" "touch" || exit $?
         fi
 
-        # Ender 5 Max we don't have firmware for it, so need to configure cartographer instead for adxl
-        if [ "$MODEL" = "F004" ]; then
-          # new versions of Ender 5 Max firmware added accel_chip_proxy to replace adxl
-          $CONFIG_HELPER --add-section "adxl345"
-          $CONFIG_HELPER --replace-section-entry "adxl345" "cs_pin" "scanner:PA3" || exit $?
-          $CONFIG_HELPER --replace-section-entry "adxl345" "spi_bus" "spi1" || exit $?
-          $CONFIG_HELPER --replace-section-entry "adxl345" "axes_map" "x,y,z" || exit $?
-          $CONFIG_HELPER --remove-section-entry "adxl345" "spi_speed" || exit $?
-          $CONFIG_HELPER --remove-section-entry "adxl345" "spi_software_sclk_pin" || exit $?
-          $CONFIG_HELPER --remove-section-entry "adxl345" "spi_software_mosi_pin" || exit $?
-          $CONFIG_HELPER --remove-section-entry "adxl345" "spi_software_miso_pin" || exit $?
-          $CONFIG_HELPER --replace-section-entry "resonance_tester" "accel_chip" "adxl345" || exit $?
-        fi
-
         echo "cartotouch-probe" >> /usr/data/pellcorp.done
         sync
         return 1
@@ -1515,18 +1554,51 @@ function setup_cartotouch() {
     return 0
 }
 
+function set_serial_cartographer() {
+    local SERIAL_ID=$(ls /dev/serial/by-id/usb-* | grep "IDM\|Cartographer" | head -1)
+    if [ -n "$SERIAL_ID" ]; then
+        local EXISTING_SERIAL_ID=$($CONFIG_HELPER --file cartographer.cfg --get-section-entry "mcu cartographer" "serial")
+        if [ "$EXISTING_SERIAL_ID" != "$SERIAL_ID" ]; then
+            local cs_pin=$($CONFIG_HELPER --get-section-entry "adxl345" "cs_pin")
+            local CARTO_TYPE=$(echo $SERIAL_ID | awk -F '_' '{print $2}')
+            if [ "$CARTO_TYPE" = "stm32g431xx" ]; then # a V4
+              if [ "$cs_pin" = "cartographer:PA3" ]; then
+                echo
+                echo "INFO: Cartographer V3 ADXL Configuration detected for a Cartographer V4 - Repairing"
+                sed -i 's/cartographer:PA3/cartographer:PA0/g' /usr/data/printer_data/config/printer.cfg
+              fi
+            else # a V3
+              if [ "$cs_pin" = "cartographer:PA0" ]; then
+                echo
+                echo "INFO: Cartographer V4 ADXL Configuration detected for a Cartographer V3 - Repairing"
+                sed -i 's/cartographer:PA0/cartographer:PA3/g' /usr/data/printer_data/config/printer.cfg
+              fi
+            fi
+
+            $CONFIG_HELPER --file cartographer.cfg --replace-section-entry "mcu cartographer" "serial" "$SERIAL_ID" || exit $?
+            echo "Serial value changed"
+            return 1
+        else
+            echo "Serial value is unchanged"
+            return 0
+        fi
+    else
+        echo
+        echo "WARNING: There does not seem to be a cartographer attached - skipping serial auto configuration"
+        echo "  https://pellcorp.github.io/creality-wiki/cartographer_troubleshooting/#manual-cartographer-serial-device-configuration"
+        echo
+        return 0
+    fi
+}
+
 function setup_cartographer() {
     grep -q "cartographer-probe" /usr/data/pellcorp.done
     if [ $? -ne 0 ]; then
         echo
-        echo "INFO: Setting up cartographer V2 ..."
-
-        cleanup_probes
-
-        cp /usr/data/pellcorp/k1/cartographer.conf /usr/data/printer_data/config/ || exit $?
-        $CONFIG_HELPER --file moonraker.conf --add-include "cartographer.conf" || exit $?
+        echo "INFO: Setting up cartographer ..."
 
         cp /usr/data/pellcorp/config/cartographer_macro.cfg /usr/data/printer_data/config/ || exit $?
+        sed -i "s:\$HOME:/usr/data:g" /usr/data/printer_data/config/cartographer_macro.cfg
         $CONFIG_HELPER --add-include "cartographer_macro.cfg" || exit $?
 
         $CONFIG_HELPER --replace-section-entry "stepper_z" "homing_retract_dist" "0" || exit $?
@@ -1538,21 +1610,12 @@ function setup_cartographer() {
         x_position_mid=$($CONFIG_HELPER --get-section-entry "stepper_x" "position_max" --divisor 2 --integer)
         $CONFIG_HELPER --file cartographer.cfg --replace-section-entry "bed_mesh" "zero_reference_position" "$x_position_mid,$y_position_mid" || exit $?
 
-        set_serial_cartographer
+        # due to ridiculous issue with cartographer not handling slight out of band temps just set it here and let everyone else use 150
+        $CONFIG_HELPER --file start_end.cfg --replace-section-entry "gcode_macro _START_END_PARAMS" "variable_start_preheat_nozzle_temp" 148 || exit $?
 
-        # Ender 5 Max we don't have firmware for it, so need to configure cartographer instead for adxl
-        if [ "$MODEL" = "F004" ]; then
-          # new versions of Ender 5 Max firmware added accel_chip_proxy to replace adxl
-          $CONFIG_HELPER --add-section "adxl345"
-          $CONFIG_HELPER --replace-section-entry "adxl345" "cs_pin" "scanner:PA3" || exit $?
-          $CONFIG_HELPER --replace-section-entry "adxl345" "spi_bus" "spi1" || exit $?
-          $CONFIG_HELPER --replace-section-entry "adxl345" "axes_map" "x,y,z" || exit $?
-          $CONFIG_HELPER --remove-section-entry "adxl345" "spi_speed" || exit $?
-          $CONFIG_HELPER --remove-section-entry "adxl345" "spi_software_sclk_pin" || exit $?
-          $CONFIG_HELPER --remove-section-entry "adxl345" "spi_software_mosi_pin" || exit $?
-          $CONFIG_HELPER --remove-section-entry "adxl345" "spi_software_miso_pin" || exit $?
-          $CONFIG_HELPER --replace-section-entry "resonance_tester" "accel_chip" "adxl345" || exit $?
-        fi
+        $CONFIG_HELPER --file cartographer_macro.cfg --replace-section-entry "gcode_macro _CARTOGRAPHER_TOUCH_HOME" "variable_stop_start_camera" "True" || exit $?
+        $CONFIG_HELPER --file cartographer_macro.cfg --replace-section-entry "gcode_macro CARTOGRAPHER_AXIS_TWIST_COMPENSATION" "variable_stop_start_camera" "True" || exit $?
+        $CONFIG_HELPER --file cartographer_macro.cfg --replace-section-entry "gcode_macro _CARTOGRAPHER_QUICKSTART" "variable_stop_start_camera" "True" || exit $?
 
         echo "cartographer-probe" >> /usr/data/pellcorp.done
         sync
@@ -1567,13 +1630,17 @@ function set_serial_beacon() {
         local EXISTING_SERIAL_ID=$($CONFIG_HELPER --file beacon.cfg --get-section-entry "beacon" "serial")
         if [ "$EXISTING_SERIAL_ID" != "$SERIAL_ID" ]; then
             $CONFIG_HELPER --file beacon.cfg --replace-section-entry "beacon" "serial" "$SERIAL_ID" || exit $?
+            echo "Serial value changed"
             return 1
         else
             echo "Serial value is unchanged"
             return 0
         fi
     else
-        echo "WARNING: There does not seem to be a beacon attached - skipping auto configuration"
+        echo
+        echo "WARNING: There does not seem to be a beacon attached - skipping serial auto configuration"
+        echo "  https://pellcorp.github.io/creality-wiki/beacon_troubleshooting/#manual-beacon-serial-device-configuration"
+        echo
         return 0
     fi
 }
@@ -1584,11 +1651,6 @@ function setup_beacon() {
         echo
         echo "INFO: Setting up beacon ..."
 
-        cleanup_probes
-
-        cp /usr/data/pellcorp/k1/beacon.conf /usr/data/printer_data/config/ || exit $?
-        $CONFIG_HELPER --file moonraker.conf --add-include "beacon.conf" || exit $?
-
         cp /usr/data/pellcorp/config/beacon_macro.cfg /usr/data/printer_data/config/ || exit $?
         $CONFIG_HELPER --add-include "beacon_macro.cfg" || exit $?
 
@@ -1598,7 +1660,7 @@ function setup_beacon() {
         $CONFIG_HELPER --add-include "beacon.cfg" || exit $?
 
         # for beacon can't use homing override
-        $CONFIG_HELPER --file sensorless.cfg --remove-section "homing_override"
+        $CONFIG_HELPER --file homing.cfg --remove-section "homing_override"
 
         y_position_mid=$($CONFIG_HELPER --get-section-entry "stepper_y" "position_max" --divisor 2 --integer)
         x_position_mid=$($CONFIG_HELPER --get-section-entry "stepper_x" "position_max" --divisor 2 --integer)
@@ -1610,13 +1672,9 @@ function setup_beacon() {
             $CONFIG_HELPER --file beacon.cfg --replace-section-entry "beacon" "home_y_before_x" "True" || exit $?
         fi
 
-        set_serial_beacon
-
-        # Ender 5 Max we don't have firmware for it, so need to configure cartographer instead for adxl
-        if [ "$MODEL" = "F004" ]; then
-          $CONFIG_HELPER --remove-section "adxl345" || exit $?
-          $CONFIG_HELPER --replace-section-entry "resonance_tester" "accel_chip" "beacon" || exit $?
-        fi
+        $CONFIG_HELPER --file beacon_macro.cfg --replace-section-entry "gcode_macro _BEACON_CONTACT_HOME" "variable_stop_start_camera" "True" || exit $?
+        $CONFIG_HELPER --file beacon_macro.cfg --replace-section-entry "gcode_macro BED_MESH_CALIBRATE" "variable_stop_start_camera" "True" || exit $?
+        $CONFIG_HELPER --file beacon_macro.cfg --replace-section-entry "gcode_macro AXIS_TWIST_COMPENSATION_CALIBRATE" "variable_stop_start_camera" "True" || exit $?
 
         echo "beacon-probe" >> /usr/data/pellcorp.done
         sync
@@ -1631,13 +1689,17 @@ function set_serial_btteddy() {
         local EXISTING_SERIAL_ID=$($CONFIG_HELPER --file btteddy.cfg --get-section-entry "mcu eddy" "serial")
         if [ "$EXISTING_SERIAL_ID" != "$SERIAL_ID" ]; then
             $CONFIG_HELPER --file btteddy.cfg --replace-section-entry "mcu eddy" "serial" "$SERIAL_ID" || exit $?
+            echo "Serial value changed"
             return 1
         else
             echo "Serial value is unchanged"
             return 0
         fi
     else
-        echo "WARNING: There does not seem to be a btt eddy attached - skipping auto configuration"
+        echo
+        echo "WARNING: There does not seem to be a btt eddy attached - skipping serial auto configuration"
+        echo "  https://pellcorp.github.io/creality-wiki/btteddy_troubleshooting/#manual-btt-eddy-serial-device-configuration"
+        echo
         return 0
     fi
 }
@@ -1648,8 +1710,6 @@ function setup_btteddy() {
         echo
         echo "INFO: Setting up btteddy ..."
 
-        cleanup_probes
-
         # the old calibration macros are no longer supported
         if [ -f /usr/data/printer_data/config/btteddy_calibrate.cfg ]; then
           rm /usr/data/printer_data/config/btteddy_calibrate.cfg || exit $?
@@ -1659,13 +1719,15 @@ function setup_btteddy() {
         cp /usr/data/pellcorp/config/btteddy.cfg /usr/data/printer_data/config/ || exit $?
         $CONFIG_HELPER --add-include "btteddy.cfg" || exit $?
 
-        set_serial_btteddy
-
         cp /usr/data/pellcorp/config/btteddy_macro.cfg /usr/data/printer_data/config/ || exit $?
         $CONFIG_HELPER --add-include "btteddy_macro.cfg" || exit $?
 
         $CONFIG_HELPER --remove-section "probe_eddy_current btt_eddy" || exit $?
         $CONFIG_HELPER --add-section "probe_eddy_current btt_eddy" || exit $?
+
+        # for rpi we don't need to turn the camera off
+        $CONFIG_HELPER --file btteddy_macro.cfg --replace-section-entry "gcode_macro BTTEDDY_CURRENT_CALIBRATE" "variable_stop_start_camera" "True" || exit $?
+        $CONFIG_HELPER --file btteddy_macro.cfg --replace-section-entry "gcode_macro BTTEDDY_TEMPERATURE_PROBE_CALIBRATE" "variable_stop_start_camera" "True" || exit $?
 
         echo "btteddy-probe" >> /usr/data/pellcorp.done
         sync
@@ -1680,13 +1742,17 @@ function set_serial_eddyng() {
         local EXISTING_SERIAL_ID=$($CONFIG_HELPER --file eddyng.cfg --get-section-entry "mcu eddy" "serial")
         if [ "$EXISTING_SERIAL_ID" != "$SERIAL_ID" ]; then
             $CONFIG_HELPER --file eddyng.cfg --replace-section-entry "mcu eddy" "serial" "$SERIAL_ID" || exit $?
+            echo "Serial value changed"
             return 1
         else
             echo "Serial value is unchanged"
             return 0
         fi
     else
-        echo "WARNING: There does not seem to be a btt eddy ng attached - skipping auto configuration"
+        echo
+        echo "WARNING: There does not seem to be a btt eddy attached - skipping serial auto configuration"
+        echo "  https://pellcorp.github.io/creality-wiki/eddyng_troubleshooting/#manual-eddyng-serial-device-configuration"
+        echo
         return 0
     fi
 }
@@ -1697,8 +1763,6 @@ function setup_eddyng() {
         echo
         echo "INFO: Setting up btt eddy-ng ..."
 
-        cleanup_probes
-
         # the old calibration macros are no longer supported
         if [ -f /usr/data/printer_data/config/btteddy_calibrate.cfg ]; then
           rm /usr/data/printer_data/config/btteddy_calibrate.cfg || exit $?
@@ -1708,10 +1772,10 @@ function setup_eddyng() {
         cp /usr/data/pellcorp/config/eddyng.cfg /usr/data/printer_data/config/ || exit $?
         $CONFIG_HELPER --add-include "eddyng.cfg" || exit $?
 
-        set_serial_eddyng
-
         cp /usr/data/pellcorp/config/eddyng_macro.cfg /usr/data/printer_data/config/ || exit $?
         $CONFIG_HELPER --add-include "eddyng_macro.cfg" || exit $?
+
+        $CONFIG_HELPER --file eddyng_macro.cfg --replace-section-entry "gcode_macro _PROBE_EDDY_NG_TAP_HOME" "variable_stop_start_camera" "True" || exit $?
 
         $CONFIG_HELPER --remove-section "probe_eddy_ng btt_eddy" || exit $?
         $CONFIG_HELPER --add-section "probe_eddy_ng btt_eddy" || exit $?
@@ -1757,10 +1821,13 @@ function install_packages() {
 }
 
 function apply_overrides() {
+    local old_probe=$1
+    local probe=$2
+
     return_status=0
     grep -q "overrides" /usr/data/pellcorp.done
     if [ $? -ne 0 ]; then
-        /usr/data/pellcorp/tools/apply-overrides.sh
+        /usr/data/pellcorp/tools/apply-overrides.sh "$old_probe" "$probe"
         return_status=$?
         echo "overrides" >> /usr/data/pellcorp.done
         sync
@@ -1807,6 +1874,15 @@ function fixup_client_variables_config() {
     if [ -z "$variable_park_at_cancel_x" ]; then
         echo "ERROR: The variable_park_at_cancel_x has no value"
         return 0
+    fi
+
+    # if the filament sensor was removed by config overrides we need to clean up the client variable config
+    if ! $CONFIG_HELPER --section-exists "filament_switch_sensor filament_sensor"; then
+      variable_runout_sensor=$($CONFIG_HELPER --file start_end.cfg --get-section-entry "gcode_macro _CLIENT_VARIABLE" "variable_runout_sensor")
+      if [ -n "$variable_runout_sensor" ]; then
+        $CONFIG_HELPER --file start_end.cfg --replace-section-entry "gcode_macro _CLIENT_VARIABLE" "variable_runout_sensor" "\"\"" || exit $?
+        changed=1
+      fi
     fi
 
     if [ $variable_custom_park_x -eq 0 ] || [ $variable_custom_park_x -ge $position_max_x ] || [ $variable_custom_park_x -le $position_min_x ]; then
@@ -1878,9 +1954,33 @@ function fix_custom_config() {
     return $changed
 }
 
+function fix_serial() {
+  local probe=$1
+
+  set_serial=0
+  if [ "$probe" = "cartotouch" ]; then
+    set_serial_cartotouch
+    set_serial=$?
+  elif [ "$probe" = "cartographer" ]; then
+    set_serial_cartographer
+    set_serial=$?
+  elif [ "$probe" = "beacon" ]; then
+    set_serial_beacon
+    set_serial=$?
+  elif [ "$probe" = "btteddy" ]; then
+    set_serial_btteddy
+    set_serial=$?
+  elif [ "$probe" = "eddyng" ]; then
+    set_serial_eddyng
+    set_serial=$?
+  fi
+  return $set_serial
+}
+
 if [ -f /usr/data/pellcorp.done ] && [ $(grep "probe" /usr/data/pellcorp.done | wc -l) -ge 2 ] && [ ! -L /usr/share/klipper ]; then
     echo
-    echo "ERROR: Switch to stock has been activated"
+    echo "ERROR: Switch to Stock Mode is ACTIVE"
+    echo
     echo "If you wish to return to SimpleAF you must run: "
     echo "  /usr/data/pellcorp/k1/switch-to-stock.sh --revert"
     echo
@@ -1902,32 +2002,6 @@ elif [ "$1" = "--grumpy-branch" ]; then
 elif [ "$1" = "--branch" ] && [ -n "$2" ]; then # convenience for testing new features
     update_repo /usr/data/pellcorp $2 || exit $?
     exit $?
-elif [ "$1" = "--cartotouch-branch" ]; then
-    shift
-    if [ -d /usr/data/cartographer-klipper ]; then
-        branch=master
-        channel=stable
-        if [ "$1" = "stable" ]; then
-            branch=master
-        elif [ "$1" = "beta" ]; then
-            branch=beta
-            channel=dev
-        else
-            branch=$1
-            channel=dev
-        fi
-        update_repo /usr/data/cartographer-klipper $branch || exit $?
-        update_klipper || exit $?
-        if [ -f /usr/data/printer_data/config/cartotouch.conf ]; then
-            $CONFIG_HELPER --file cartotouch.conf --replace-section-entry 'update_manager cartotouch' channel $channel || exit $?
-            $CONFIG_HELPER --file cartotouch.conf --replace-section-entry 'update_manager cartotouch' primary_branch $branch || exit $?
-            restart_moonraker || exit $?
-        fi
-    else
-        echo "Error cartographer-klipper repo does not exist"
-        exit 1
-    fi
-    exit 0
 elif [ "$1" = "--klipper-branch" ]; then # convenience for testing new features
     if [ -n "$2" ]; then
         update_repo /usr/data/klipper $2 || exit $?
@@ -1940,10 +2014,6 @@ elif [ "$1" = "--klipper-branch" ]; then # convenience for testing new features
 elif [ "$1" = "--klipper-repo" ]; then # convenience for testing new features
     if [ -n "$2" ]; then
         klipper_repo=$2
-        if [ "$klipper_repo" = "k1-carto-klipper" ]; then
-            echo "ERROR: Switching to k1-carto-klipper is no longer supported"
-            exit 1
-        fi
 
         owner="${klipper_repo%%/*}"
         repo="${klipper_repo#*/}"
@@ -2027,6 +2097,7 @@ fi
     force=false
     skip_overrides=false
     probe_switch=false
+    old_probe=
     mount=
 
     if [ -f /usr/data/pellcorp.done ]; then
@@ -2046,10 +2117,6 @@ fi
         elif [ "$1" = "--mount" ]; then
             shift
             mount=$1
-            # allows the user to reapply mount overrides for current mount
-            if [ -f /usr/data/pellcorp.done ] && [ "$mount" = "%CURRENT%" ]; then
-                mount=$(cat /usr/data/pellcorp.done | grep mount= | awk -F '=' '{print $2}')
-            fi
 
             if [ -z "$mount" ]; then
                 mount=unknown
@@ -2065,6 +2132,7 @@ fi
             fi
             if [ -n "$probe" ] && [ "$1" != "$probe" ]; then
               echo "WARNING: About to switch from $probe to $1!"
+              old_probe=${probe}
               probe_switch=true
             fi
             probe=$1
@@ -2088,7 +2156,9 @@ fi
     if [ -n "$PELLCORP_UPDATED_SHA" ]; then
         if [ "$mode" = "install" ]; then
             echo
-            echo "ERROR: Installation has already completed"
+            echo "ERROR: Installation has already completed - NO CHANGES WERE MADE!"
+            echo
+
             if [ "$probe_switch" = "true" ]; then
               echo "Perhaps you meant to execute an --update instead!"
             elif [ "$PELLCORP_UPDATED_SHA" != "$PELLCORP_GIT_SHA" ]; then
@@ -2100,7 +2170,8 @@ fi
             exit 1
         elif [ "$mode" = "update" ] && [ "$PELLCORP_UPDATED_SHA" = "$PELLCORP_GIT_SHA" ] && [ "$probe_switch" != "true" ] && [ "$force" != "true" ] && [ -z "$mount" ]; then
             echo
-            echo "ERROR: Installation is already up to date"
+            echo "ERROR: Installation is already up to date - NO CHANGES WERE MADE!"
+            echo
             echo "Perhaps you forgot to execute a --branch main first!"
             echo "  https://pellcorp.github.io/creality-wiki/updating/#updating"
             echo
@@ -2129,6 +2200,16 @@ fi
           echo "WARNING: Enforcing mount overrides for mount $install_mount for migration"
           mount=$install_mount
         fi
+      elif [ -n "$mount" ] && [ -n "$install_mount" ]; then
+        if [ "$mount" = "%CURRENT%" ]; then
+          mount=$install_mount
+        fi
+
+        if [ "$mode" = "update" ] && [ "$mount" = "$install_mount" ] && [ "$probe_switch" != "true" ] && [ "$force" != "true" ]; then
+          echo "ERROR: You have specified --mount $mount for your existing mount!"
+          echo "INFO: If you know what you are doing you can force reapplying mount overrides with --force"
+          exit 1
+        fi
       fi
 
       if [ -n "$mount" ]; then
@@ -2154,25 +2235,8 @@ fi
 
     if [ "$mode" = "fix-serial" ]; then
         if [ -f /usr/data/pellcorp.done ]; then
-            if [ "$probe" = "cartotouch" ]; then
-                set_serial_cartotouch
-                set_serial=$?
-            elif [ "$probe" = "cartographer" ]; then
-                set_serial_cartographer
-                set_serial=$?
-            elif [ "$probe" = "beacon" ]; then
-                set_serial_beacon
-                set_serial=$?
-            elif [ "$probe" = "btteddy" ]; then
-                set_serial_btteddy
-                set_serial=$?
-            elif [ "$probe" = "eddyng" ]; then
-                set_serial_eddyng
-                set_serial=$?
-            else
-                echo "ERROR: Fix serial not supported for $probe"
-                exit 1
-            fi
+          fix_serial $probe
+          set_serial=$?
         else
             echo "ERROR: No installation found"
             exit 1
@@ -2320,8 +2384,9 @@ fi
     # create a directory for pngs to go
     mkdir -p /usr/data/printer_data/config/images
 
-    # add a service to take care of updating various config files if ip address changes
-    cp /usr/data/pellcorp/k1/services/S96ipaddress /etc/init.d/
+    # we are going back to just using the webcam via nginx for simplicity
+    [ -f /etc/init.d/S96ipaddress ] && rm /etc/init.d/S96ipaddress
+    [ -f /usr/data/pellcorp.ipaddress ] && rm /usr/data/pellcorp.ipaddress
 
     if [ -L /usr/data/printer_data/logs/messages ]; then
       rm /usr/data/printer_data/logs/messages
@@ -2336,6 +2401,7 @@ fi
 
     install_packages $mode
     install_webcam $mode
+    install_webcam=$?
     install_boot_display
 
     install_moonraker $mode
@@ -2353,6 +2419,8 @@ fi
     install_klipper $mode $probe
     install_klipper=$?
 
+    cleanup_probes
+
     install_cartographer_klipper=0
     install_cartographer_plugin=0
     install_beacon_klipper=0
@@ -2367,11 +2435,22 @@ fi
       install_beacon_klipper=$?
     fi
 
-    install_guppyscreen $mode "$GRUMPYSCREEN_BRANCH"
-    install_guppyscreen=$?
+    install_guppyscreen=0
+    if [ -f /etc/init.d/S99helixscreen ]; then
+      echo
+      echo "INFO: HelixScreen detected skipping GrumpyScreen"
+      echo
+    else
+      install_guppyscreen $mode "$GRUMPYSCREEN_BRANCH"
+      install_guppyscreen=$?
+    fi
 
-    setup_probe
-    setup_probe=$?
+    setup_probe=0
+    # for ender 3 v3 stupid fucking thing need to leave z as endstop
+    if [ "$MODEL" != "F001" ] && [ "$MODEL" != "F002" ]; then
+      setup_probe
+      setup_probe=$?
+    fi
 
     if [ "$probe" = "cartotouch" ]; then
         setup_cartotouch
@@ -2405,18 +2484,22 @@ fi
     if [ -f /usr/data/pellcorp-backups/printer.factory.cfg ]; then
         # we want a copy of the file before config overrides are re-applied so we can correctly generate diffs
         # against different generations of the original file
-        for file in printer.cfg start_end.cfg fan_control.cfg ${probe}.conf spoolman.conf internal_macros.cfg useful_macros.cfg timelapse.conf moonraker.conf webcam.conf sensorless.cfg ${probe}_macro.cfg ${probe}.cfg; do
+        for file in printer.cfg start_end.cfg fan_control.cfg ${probe}.conf spoolman.conf internal_macros.cfg useful_macros.cfg timelapse.conf moonraker.conf webcam.conf webcam.ini homing.cfg ${probe}_macro.cfg ${probe}.cfg; do
             if [ -f /usr/data/printer_data/config/$file ]; then
                 cp /usr/data/printer_data/config/$file /usr/data/pellcorp-backups/$file
             fi
         done
     fi
 
+    # remove old cfg files
+    [ -f /usr/data/pellcorp-backups/sensorless.cfg ] && rm /usr/data/pellcorp-backups/sensorless.cfg
+    [ -f /usr/data/printer_data/config/sensorless.cfg ] && rm /usr/data/printer_data/config/sensorless.cfg
+
     apply_overrides=0
     # there will be no support for generating pellcorp-overrides unless you have done a factory reset
     if [ -f /usr/data/pellcorp-backups/printer.factory.cfg ]; then
         if [ "$skip_overrides" != "true" ]; then
-            apply_overrides
+            apply_overrides "${old_probe}" "${probe}"
             apply_overrides=$?
         fi
     fi
@@ -2425,6 +2508,13 @@ fi
     if [ -n "$mount" ]; then
         /usr/data/pellcorp/tools/apply-mount-overrides.sh $probe $mount $model
         apply_mount_overrides=$?
+
+        # if a new mount clean out existing calibrations
+        if [ -n "$install_mount" ] && [ "$mount" != "$install_mount" ] && [ "$probe_switch" != "true" ]; then
+          echo
+          echo "INFO: Removing old $install_mount mount save config ..."
+          /usr/data/pellcorp/tools/cleanup-save-config.sh $probe --mount
+        fi
     fi
 
     # cleanup any M109 or M190 redefined
@@ -2437,11 +2527,12 @@ fi
         echo "INFO: No changes made"
     fi
 
-    /usr/data/pellcorp/k1/update-ip-address.sh
-    update_ip_address=$?
     echo
-    
-    if [ $apply_overrides -ne 0 ] || [ $install_moonraker -ne 0 ] || [ $install_cartographer_plugin -ne 0 ] || [ $install_cartographer_klipper -ne 0 ] || [ $install_beacon_klipper -ne 0 ] || [ $update_ip_address -ne 0 ]; then
+    fix_serial $probe
+    set_serial=$?
+    echo
+
+    if [ $apply_overrides -ne 0 ] || [ $install_moonraker -ne 0 ] || [ $install_cartographer_plugin -ne 0 ] || [ $install_cartographer_klipper -ne 0 ] || [ $install_beacon_klipper -ne 0 ]; then
         echo "INFO: Restarting Moonraker ..."
         sudo systemctl restart moonraker
     fi
@@ -2451,7 +2542,7 @@ fi
         sudo systemctl restart nginx
     fi
 
-    if [ $fix_custom_config -ne 0 ] || [ $fixup_client_variables_config -ne 0 ] || [ $apply_overrides -ne 0 ] || [ $apply_mount_overrides -ne 0 ] || [ $install_cartographer_klipper -ne 0 ] || [ $install_beacon_klipper -ne 0 ] || [ $install_klipper -ne 0 ] || [ $setup_probe -ne 0 ] || [ $setup_probe_specific -ne 0 ]; then
+    if [ $set_serial -ne 0 ] || [ $fix_custom_config -ne 0 ] || [ $fixup_client_variables_config -ne 0 ] || [ $apply_overrides -ne 0 ] || [ $apply_mount_overrides -ne 0 ] || [ $install_cartographer_klipper -ne 0 ] || [ $install_beacon_klipper -ne 0 ] || [ $install_klipper -ne 0 ] || [ $setup_probe -ne 0 ] || [ $setup_probe_specific -ne 0 ]; then
         echo "INFO: Restarting Klipper ..."
         sudo systemctl restart klipper
         sudo systemctl restart klipper_mcu
@@ -2460,6 +2551,11 @@ fi
     if [ $apply_overrides -ne 0 ] || [ $install_guppyscreen -ne 0 ]; then
         echo "INFO: Restarting Grumpyscreen ..."
         sudo systemctl restart grumpyscreen
+    fi
+
+    if [ $apply_overrides -ne 0 ] || [ $install_webcam -ne 0 ]; then
+        echo "INFO: Restarting Webcam ..."
+        sudo systemctl restart webcam
     fi
 
     echo

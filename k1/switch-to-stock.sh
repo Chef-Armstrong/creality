@@ -66,8 +66,16 @@ if [ -f /usr/data/backups/creality-backup.tar.gz ]; then
       rm -rf /usr/data/printer_data/config/*.cfg
       rm -rf /usr/data/printer_data/config/*.conf
 
-      # for stock screen grumpyscreen needs to be disabled
-      rm /etc/init.d/S99guppyscreen
+      # for stock screen helixscreen/grumpyscreen needs to be disabled
+      if [ -f /etc/init.d/S99helixscreen ]; then
+        echo
+        echo "INFO: HelixScreen has been disabled"
+        mv /etc/init.d/S99helixscreen /usr/data
+      elif [ -f /etc/init.d/S99guppyscreen ]; then
+        echo
+        echo "INFO: GrumpyScreen has been disabled"
+        rm /etc/init.d/S99guppyscreen
+      fi
 
       # need these files restored back so that moonraker starts correctly
       cp /usr/data/pellcorp/k1/moonraker.conf /usr/data/printer_data/config/
@@ -75,7 +83,23 @@ if [ -f /usr/data/backups/creality-backup.tar.gz ]; then
       cp /usr/data/pellcorp/config/notifier.conf /usr/data/printer_data/config/
 
       tar -zxf /usr/data/backups/creality-backup.tar.gz -C /usr/data
-      sync
+
+      cat > /root/.profile.stock << EOF
+echo
+echo "--------------------- Switch to Stock Mode is ACTIVE ---------------------"
+echo
+echo "If you wish to return to SimpleAF you must run:"
+echo
+echo "   /usr/data/pellcorp/k1/switch-to-stock.sh --revert"
+echo
+echo "--------------------------------------------------------------------------"
+echo
+EOF
+
+      if ! grep -q "source /root/.profile.stock" /root/.profile 2> /dev/null; then
+        echo "source /root/.profile.stock 2> /dev/null" >> /root/.profile
+      fi
+    sync
     else
       echo "WARN: Stock is already active"
       exit 1
@@ -110,9 +134,22 @@ if [ -f /usr/data/backups/creality-backup.tar.gz ]; then
       rm -rf /usr/data/printer_data/config/*.cfg
       rm -rf /usr/data/printer_data/config/*.conf
       cp /usr/data/pellcorp/k1/services/S55klipper_service /etc/init.d/
-      cp /usr/data/pellcorp/k1/services/S99guppyscreen /etc/init.d/
+
+      # the backed up /etc/init.d/S99helixscreen from switching to stock
+      if [ -f /usr/data/S99helixscreen ]; then
+        echo
+        echo "INFO: Restoring HelixScreen"
+        mv /usr/data/S99helixscreen /etc/init.d/
+      else
+        echo
+        echo "INFO: Restoring GrumpyScreen"
+        cp /usr/data/pellcorp/k1/services/S99guppyscreen /etc/init.d/
+      fi
+
       ln -sf /usr/data/klipper/fw/K1/klipper_host_mcu /usr/bin/klipper_mcu
       /usr/data/pellcorp/tools/backups.sh --restore backup-latest.tar.gz
+      [ -f /root/.profile.stock ] && rm /root/.profile.stock
+      sync
     else
         echo "WARN: Stock is not active"
         exit 1

@@ -29,9 +29,16 @@ if grep -Fqs "ID=buildroot" /etc/os-release; then
         echo "CRITICAL: There is $(df -h $BASEDIR | tail -1 | awk '{print $4}') remaining on your $BASEDIR partition"
         exit 1
     fi
+else
+  # on rpi should not be run as root
+  if [ "$(whoami)" = "root" ]; then
+    echo "FATAL: This installer must not be run as root"
+    exit 1
+  fi
 fi
 
-echo "Generating support.zip, please wait..."
+echo
+echo "INFO: Generating support.zip, please wait..."
 
 if [ -f $BASEDIR/printer_data/config/support.tar.gz ]; then
     rm $BASEDIR/printer_data/config/support.tar.gz
@@ -54,12 +61,18 @@ echo "---------------- top -----------------------------------------------------
 top -b -n 1 >> $BASEDIR/support.log
 echo "---------------- free ------------------------------------------------------" >> $BASEDIR/support.log
 free >> $BASEDIR/support.log
-echo "---------------- lsusb -----------------------------------------------------" >> $BASEDIR/support.log
-lsusb >> $BASEDIR/support.log
-echo "---------------- ls -la /etc/init.d ----------------------------------------" >> $BASEDIR/support.log
-ls -la /etc/init.d >> $BASEDIR/support.log
+command -v lsusb > /dev/null
+if [ $? -eq 0 ]; then
+  echo "---------------- lsusb -----------------------------------------------------" >> $BASEDIR/support.log
+  lsusb >> $BASEDIR/support.log
+fi
+if [ -d /etc/init.d ]; then
+  echo "---------------- ls -la /etc/init.d ----------------------------------------" >> $BASEDIR/support.log
+  ls -la /etc/init.d >> $BASEDIR/support.log
+fi
+
 echo "---------------- ls -laR $BASEDIR -----------------------------------------" >> $BASEDIR/support.log
-ls -laR $BASEDIR >> $BASEDIR/support.log
+ls -laR $BASEDIR 2> /dev/null >> $BASEDIR/support.log
 echo "----------------------------------------------------------------------------" >> $BASEDIR/support.log
 
 if [ -f /var/log/messages ]; then
@@ -75,14 +88,24 @@ if [ -z "$latest_klippy_log" ] || [ ! -f $latest_klippy_log ]; then
   unset latest_klippy_log
 fi
 
-$BASEDIR/pellcorp/tools/supportzip.py $BASEDIR/support.zip support.log pellcorp-overrides/ pellcorp-backups/ printer_data/config/ printer_data/logs/installer-*.log printer_data/logs/klippy.log $latest_klippy_log printer_data/logs/moonraker.log printer_data/logs/grumpyscreen.log $TMPDIR/messages.log /tmp/mcu_update.log
+# we need to make copies of currently streaming logs to avoid corruption
+cp printer_data/logs/klippy.log $TMPDIR/klippy.log
+cp printer_data/logs/moonraker.log $TMPDIR/moonraker.log
+cp printer_data/logs/grumpyscreen.log $TMPDIR/grumpyscreen.log 2> /dev/null
+
+$BASEDIR/pellcorp/tools/supportzip.py $BASEDIR/support.zip support.log pellcorp-overrides/ pellcorp-backups/ printer_data/config/ printer_data/logs/installer-*.log $TMPDIR/klippy.log $latest_klippy_log $TMPDIR/moonraker.log $TMPDIR/grumpyscreen.log $TMPDIR/messages.log /tmp/mcu_update.log
 cd - > /dev/null
 
-rm $TMPDIR/messages.log
-rm $BASEDIR/support.log
+# cleanup only the files we created temporarily
+rm $TMPDIR/klippy.log $TMPDIR/moonraker.log $TMPDIR/grumpyscreen.log $TMPDIR/messages.log 2> /dev/null
+
 if [ -f $BASEDIR/support.zip ]; then
     mv $BASEDIR/support.zip $BASEDIR/printer_data/config/
-    echo "Upload the support.zip to discord"
+    sync
+    echo
+    echo "Upload the $BASEDIR/printer_data/config/support.zip to discord"
+    echo "You can also find it in the config directory in fluidd or mainsail"
+    echo
     exit 0
 else
     echo "ERROR: Failed to create the support.zip file"

@@ -74,17 +74,20 @@ override_file() {
         original_file="$BASEDIR/pellcorp/${CONFIG_TYPE}/$file"
     fi
     updated_file="$BASEDIR/printer_data/config/$file"
+    if [ "$file" = "moonraker.asvc" ]; then
+      updated_file="$BASEDIR/printer_data/moonraker.asvc"
+    fi
     
     if [ -f "$BASEDIR/pellcorp-backups/$file" ]; then
         original_file="$BASEDIR/pellcorp-backups/$file"
+    elif [ "$file" = "grumpyscreen.ini" ] && [ -f "$BASEDIR/pellcorp-backups/grumpyscreen.cfg" ]; then
+        original_file="$BASEDIR/pellcorp-backups/grumpyscreen.cfg"
     elif [ "$file" = "guppyscreen.cfg" ]; then # old file ignore it
         return 0
     elif [ "$file" = "belts_calibration.cfg" ] || [ "$file" = "KlipperScreen.conf" ]; then
-        #echo "INFO: Overrides not supported for $file"
         return 0
-    elif [ "$file" = "grumpyscreen.cfg" ] || [ "$file" = "printer.cfg" ] || [ "$file" = "internal_macros.cfg" ] || [ "$file" = "useful_macros.cfg" ] || [ "$file" = "webcam.conf" ] || [ "$file" = "beacon.conf" ] || [ "$file" = "cartographer.conf" ] || [ "$file" = "moonraker.conf" ] || [ "$file" = "start_end.cfg" ] || [ "$file" = "fan_control.cfg" ]; then
-        # for grumpyscreen.cfg, printer.cfg, webcam.conf, useful_macros.cfg, start_end.cfg, fan_control.cfg and moonraker.conf - there must be an pellcorp-backups file
-        #echo "INFO: Overrides not supported for $file"
+    elif [ "$file" = "moonraker.asvc" ] || [ "$file" = "grumpyscreen.ini" ] || [ "$file" = "grumpyscreen.cfg" ] || [ "$file" = "printer.cfg" ] || [ "$file" = "internal_macros.cfg" ] || [ "$file" = "useful_macros.cfg" ] || [ "$file" = "webcam.conf" ] || [ "$file" = "beacon.conf" ] || [ "$file" = "cartographer.conf" ] || [ "$file" = "moonraker.conf" ] || [ "$file" = "start_end.cfg" ] || [ "$file" = "fan_control.cfg" ] || [ "$file" = "webcam.ini" ]; then
+        # for moonraker.asvc, grumpyscreen.cfg, printer.cfg, webcam.conf, useful_macros.cfg, start_end.cfg, fan_control.cfg, moonraker.conf and webcam.ini - there must be a pellcorp-backups file
         return 0
     elif [ ! -f "$BASEDIR/pellcorp/config/$file" ] && [ ! -f "$BASEDIR/pellcorp/${CONFIG_TYPE}/$file" ]; then
         if ! echo $file | grep -qE "printer([0-9]+).cfg"; then
@@ -92,7 +95,6 @@ override_file() {
             cp $BASEDIR/printer_data/config/$file $BASEDIR/pellcorp-overrides/
             return 0
         else
-            #echo "INFO: Ignoring $BASEDIR/printer_data/config/$file ..."
             return 0
         fi
     fi
@@ -108,13 +110,39 @@ override_file() {
           overrides_file="$BASEDIR/pellcorp-overrides/microprobe.cfg"
           $CONFIG_OVERRIDES --original "$original_file" --updated "$updated_file" --overrides "$overrides_file" --include-sections probe || exit $?
       fi
+    elif [ "$file" = "moonraker.asvc" ]; then
+      # thanks gemini for this magic incantation
+      additions=$(awk 'NR==FNR {a[$0]=1; next} !a[$0]' "$original_file" "$updated_file")
+      if [ -n "$additions" ]; then
+        echo "INFO: Saving moonraker.asvc additions to $BASEDIR/pellcorp-overrides/moonraker.asvc"
+        printf "%s\n" "$additions" > $overrides_file
+      fi
     else
       $CONFIG_OVERRIDES --original "$original_file" --updated "$updated_file" --overrides "$overrides_file" || exit $?
+
+      # special handling if migrating back to nginx for webcam, this only happens when we run the tool before completing the
+      # first update after migrating cos the /usr/data/pellcorp.ipaddress will be removed!
+      if [ "$file" = "webcam.conf" ] && [ -f $BASEDIR/pellcorp-overrides/webcam.conf ] && [ -f /usr/data/pellcorp.ipaddress ]; then
+        PREVIOUS_IP_ADDRESS=$(cat /usr/data/pellcorp.ipaddress 2> /dev/null)
+        # in this case it was previously derived by the ipaddress service so clean them out so we can safely go back to nginx
+        # however if someone has enabled the skip action, this means they are managing the webcam.conf themselves and we need
+        # to retain their custom configuration
+        if [ "$PREVIOUS_IP_ADDRESS" != "skip" ]; then
+          sed -i '/stream_url/d' $BASEDIR/pellcorp-overrides/webcam.conf
+          sed -i '/snapshot_url/d' $BASEDIR/pellcorp-overrides/webcam.conf
+        fi
+      fi
     fi
 
     # we renamed the SENSORLESS_PARAMS to hide it
     if [ -f $BASEDIR/pellcorp-overrides/sensorless.cfg ]; then
+      # so this is for ancient
       sed -i 's/gcode_macro SENSORLESS_PARAMS/gcode_macro _SENSORLESS_PARAMS/g' $BASEDIR/pellcorp-overrides/sensorless.cfg
+      # this caters for recent change
+      sed -i 's/gcode_macro _SENSORLESS_PARAMS/gcode_macro _HOMING_PARAMS/g' $BASEDIR/pellcorp-overrides/sensorless.cfg
+    elif [ -f $BASEDIR/pellcorp-overrides/homing_override.cfg ]; then
+      # this is for rpi only
+      sed -i 's/gcode_macro _SENSORLESS_PARAMS/gcode_macro _HOMING_PARAMS/g' $BASEDIR/pellcorp-overrides/homing_override.cfg
     elif [ -f $BASEDIR/pellcorp-overrides/KAMP_Settings.cfg ]; then
       # remove any overrides for these values which do not apply to Smart Park and Line Purge
       sed -i '/variable_verbose_enable/d' $BASEDIR/pellcorp-overrides/KAMP_Settings.cfg
@@ -173,6 +201,15 @@ elif [ "$1" = "--repo" ] || [ "$1" = "--clean-repo" ]; then
         exit 1
     fi
 else
+  if [ $(grep "probe" $BASEDIR/pellcorp.done | wc -l) -lt 2 ]; then
+    echo
+    echo "ERROR: Previous partial installation detected, configuration overrides will not be generated"
+    if [ $(ls $BASEDIR/pellcorp-overrides/ 2> /dev/null | grep -v "config.info" | wc -l) -gt 0 ]; then
+        echo "INFO: Previous configuration overrides will be used instead"
+    fi
+    exit 1
+  fi
+
   if [ ! -f $BASEDIR/pellcorp-backups/printer.cfg ]; then
       echo "ERROR: $BASEDIR/pellcorp-backups/printer.cfg missing"
       exit 1
@@ -188,19 +225,15 @@ else
       exit 1
   fi
 
-  if [ $(grep "probe" $BASEDIR/pellcorp.done | wc -l) -lt 2 ]; then
-    echo "ERROR: Previous partial installation detected, configuration overrides will not be generated"
-    if [ -d $BASEDIR/pellcorp-overrides ]; then
-        echo "INFO: Previous configuration overrides will be used instead"
-    fi
-    exit 1
-  fi
-
   mkdir -p $BASEDIR/pellcorp-overrides
 
   rm $BASEDIR/pellcorp-overrides/*.cfg 2> /dev/null
+  rm $BASEDIR/pellcorp-overrides/*.ini 2> /dev/null
   rm $BASEDIR/pellcorp-overrides/*.conf 2> /dev/null
   rm $BASEDIR/pellcorp-overrides/*.json 2> /dev/null
+  if [ -f $BASEDIR/pellcorp-overrides/moonraker.asvc ]; then
+    rm $BASEDIR/pellcorp-overrides/moonraker.asvc
+  fi
   if [ -f $BASEDIR/pellcorp-overrides/printer.cfg.save_config ]; then
     rm $BASEDIR/pellcorp-overrides/printer.cfg.save_config
   fi
@@ -223,16 +256,21 @@ else
     sync
   fi
 
-  files=$(find $BASEDIR/printer_data/config/ -maxdepth 1 ! -name 'printer-*.cfg' -a ! -name ".printer.cfg" -a -name "*.cfg" -o -name "*.conf")
+  files=$(find $BASEDIR/printer_data/config/ -maxdepth 1 ! -name 'printer-*.cfg' -a ! -name ".printer.cfg" -a -name "*.cfg" -o -name "*.conf" -o -name "*.ini")
   for file in $files; do
     file=$(basename $file)
     if [ "$file" != "printer.cfg" ]; then
       override_file $file
     fi
   done
+
   # we want the printer.cfg to be done last
   override_file printer.cfg
 
+  if [ "$CONFIG_TYPE" = "rpi" ]; then
+    # this is a special case
+    override_file moonraker.asvc
+  fi
 fi
 
 cd $BASEDIR/pellcorp-overrides

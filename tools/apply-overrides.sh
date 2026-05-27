@@ -7,6 +7,9 @@ fi
 CONFIG_HELPER="$BASEDIR/pellcorp/tools/config-helper.py"
 
 apply_overrides() {
+    local old_probe=$1
+    local probe=$2
+
     return_status=0
     if [ -f $BASEDIR/pellcorp-overrides.cfg ] || [ -d $BASEDIR/pellcorp-overrides ]; then
         echo
@@ -28,7 +31,7 @@ apply_overrides() {
             done < "$BASEDIR/pellcorp-overrides.cfg"
         fi
 
-        files=$(find $overrides_dir -maxdepth 1 ! -name 'printer-*.cfg' -a ! -name ".printer.cfg" -a -name "*.cfg" -o -name "*.conf" -o -name "*.json" -o -name "printer.cfg.save_config")
+        files=$(find $overrides_dir -maxdepth 1 ! -name 'printer-*.cfg' -a ! -name ".printer.cfg" -a -name "*.cfg" -o -name "*.conf" -o -name "*.ini" -o -name "*.json" -o -name "printer.cfg.save_config")
         for file in $files; do
             file=$(basename $file)
 
@@ -38,11 +41,27 @@ apply_overrides() {
                 base_file=cartotouch.cfg
             elif [ "$base_file" = "btteddy.cfg" ] && [ -f $BASEDIR/printer_data/config/eddyng.cfg ]; then
                 base_file=eddyng.cfg
+            elif [ "$base_file" = "grumpyscreen.cfg" ] && [ -f $BASEDIR/printer_data/config/grumpyscreen.ini ]; then
+                base_file=grumpyscreen.ini
+            elif [ "$base_file" = "sensorless.cfg" ] && [ -f $BASEDIR/printer_data/config/homing.cfg ]; then
+              # this is for ancient migration of SENSORLESS_PARAMS
+              sed -i 's/gcode_macro SENSORLESS_PARAMS/gcode_macro _SENSORLESS_PARAMS/g' $overrides_dir/sensorless.cfg
+              # this is for recent migration of sensorless.cfg to homing.cfg
+              sed -i 's/gcode_macro _SENSORLESS_PARAMS/gcode_macro _HOMING_PARAMS/g' $overrides_dir/sensorless.cfg
+              base_file=homing.cfg
+            elif [ "$base_file" = "homing_override.cfg" ] && [ -f $BASEDIR/printer_data/config/homing.cfg ]; then
+               # for rpi migration from homing_override.cfg to homing.cfg
+              sed -i 's/gcode_macro _SENSORLESS_PARAMS/gcode_macro _HOMING_PARAMS/g' $overrides_dir/homing_override.cfg
+              base_file=homing.cfg
             fi
 
             if [ "$file" != "$base_file" ] && [ -f "$BASEDIR/pellcorp/k1/$base_file" ] && [ -f $BASEDIR/printer_data/config/${base_file} ]; then
                 $CONFIG_HELPER --file ${base_file} --overrides $overrides_dir/$file || exit $?
             elif [ "$file" != "$base_file" ] && [ -f "$BASEDIR/pellcorp/config/$base_file" ] && [ -f $BASEDIR/printer_data/config/${base_file} ]; then
+                $CONFIG_HELPER --file ${base_file} --overrides $overrides_dir/$file || exit $?
+            elif [ "$base_file" = "grumpyscreen.ini" ]; then
+                $CONFIG_HELPER --file ${base_file} --overrides $overrides_dir/$file || exit $?
+            elif [ "$base_file" = "webcam.ini" ]; then
                 $CONFIG_HELPER --file ${base_file} --overrides $overrides_dir/$file || exit $?
             elif [ "$file" = "moonraker.secrets" ]; then
                 echo "INFO: Restoring $BASEDIR/printer_data/$file ..."
@@ -64,11 +83,6 @@ apply_overrides() {
                 echo "WARN: Ignoring $file ..."
             elif [ -f "$BASEDIR/pellcorp-backups/$file" ] || [ -f "$BASEDIR/pellcorp/config/$file" ] || [ -f "$BASEDIR/pellcorp/k1/$file" ]; then
                 if [ -f $BASEDIR/printer_data/config/$file ]; then
-                    # we renamed the SENSORLESS_PARAMS to hide it
-                    if [ "$file" = "sensorless.cfg" ]; then
-                        sed -i 's/gcode_macro SENSORLESS_PARAMS/gcode_macro _SENSORLESS_PARAMS/g' $BASEDIR/pellcorp-overrides/sensorless.cfg
-                    fi
-
                     # we are migrating the bltouch and microprobe sections from printer.cfg to their own files, so we need to
                     # ignore any existing config overrides for these sections from printer.cfg, we won't try and automatically
                     # migrate them, as we have already done that for generating config overrides so the only time this
@@ -90,13 +104,25 @@ apply_overrides() {
             return_status=1
         done
 
+        if [ -f $overrides_dir/moonraker.asvc ]; then
+          echo "INFO: Applied additions to $BASEDIR/printer_data/moonraker.asvc"
+          cat $overrides_dir/moonraker.asvc >> $BASEDIR/printer_data/moonraker.asvc
+        fi
+
         # we want to apply the save config last
         if [ -f $overrides_dir/printer.cfg.save_config ]; then
             # if the printer.cfg already has SAVE_CONFIG skip applying it again
             if ! grep -q "#*# <---------------------- SAVE_CONFIG ---------------------->" $BASEDIR/printer_data/config/printer.cfg ; then
+                echo
                 echo "INFO: Applying save config state to $BASEDIR/printer_data/config/printer.cfg"
                 echo "" >> $BASEDIR/printer_data/config/printer.cfg
                 cat $overrides_dir/printer.cfg.save_config >> $BASEDIR/printer_data/config/printer.cfg
+
+                if [ -n "$old_probe" ] && [ -n "$probe" ] && [ "$old_probe" != "$probe" ]; then
+                  echo
+                  echo "INFO: Removing $old_probe save config ..."
+                  $BASEDIR/pellcorp/tools/cleanup-save-config.sh $old_probe
+                fi
                 return_status=1
             else
                 echo "WARN: Skipped applying save config state to $BASEDIR/printer_data/config/printer.cfg"
@@ -112,5 +138,9 @@ apply_overrides() {
 }
 
 mkdir -p $BASEDIR/backups/
-apply_overrides
+
+old_probe=$1
+probe=$2
+apply_overrides "${old_probe}" "${probe}"
+
 exit $?

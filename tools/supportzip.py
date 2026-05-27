@@ -8,6 +8,11 @@ import glob
 import zipfile
 from pathlib import Path
 
+
+def is_dead_symlink(path):
+    return path.is_symlink() and not path.exists()
+
+
 def make_zip(zip_name, sources, exclude_dirs=None):
     exclude_dirs = set(exclude_dirs or [".git"])
 
@@ -15,8 +20,14 @@ def make_zip(zip_name, sources, exclude_dirs=None):
         for pattern in sources:
             for path_str in glob.glob(pattern, recursive=True):
                 path = Path(path_str)
+                if is_dead_symlink(path):
+                    continue
                 if path.is_file():
-                    zf.write(path, arcname=path)
+                    arcpath = str(path)
+                    filename = os.path.basename(arcpath)
+                    if '.log' in filename:
+                        arcpath='logs/' + filename
+                    zf.write(path, arcname=arcpath)
                 elif path.is_dir():
                     for root, dirs, files in os.walk(path):
                         # filter excluded dirs in-place so os.walk won't descend
@@ -24,7 +35,13 @@ def make_zip(zip_name, sources, exclude_dirs=None):
 
                         for f in files:
                             fpath = Path(root) / f
-                            zf.write(fpath, arcname=fpath)
+                            if is_dead_symlink(fpath):
+                                continue
+                            arcpath = str(fpath)
+                            filename = os.path.basename(arcpath)
+                            if 'printer_data/config' in arcpath:
+                                arcpath='config/' + filename
+                            zf.write(fpath, arcname=arcpath)
 
 
 def main():
